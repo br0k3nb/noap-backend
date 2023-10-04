@@ -1,6 +1,6 @@
 {
-  "type": "module",
   "name": "noap-server",
+  "type": "module",
   "version": "1.0.0",
   "description": "",
   "main": "server.js",
@@ -9,6 +9,9 @@
     "splitting": false,
     "sourcemap": true,
     "clean": false
+  },
+  "engines": {
+    "node": "18"
   },
   "scripts": {
     "start": "nodemon ./src/server.js",
