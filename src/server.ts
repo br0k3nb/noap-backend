@@ -4,12 +4,12 @@ import cors from 'cors';
 import bodyParser from 'body-parser';
 import 'dotenv';
 
-import routes from './routes/index.js';
+import routes from './routes/index';
 
 const app = express();
 
 mongoose.set("strictQuery", true);
-mongoose.connect(`${process.env.MONGODB_URL}`), err => err && console.log(err);
+mongoose.connect(`${process.env.MONGODB_URL}`), (err: unknown) => err && console.log(err);
 
 app.use(bodyParser.json({ limit: '524288000' })); //seting a high limit just for testing purposes
 app.use(cors());

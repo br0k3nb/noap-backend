@@ -7,13 +7,13 @@ import DeviceDetector from "node-device-detector";
 import emojiFlags from 'emoji-flags';
 import axios from "axios";
 
-import User from "../models/User.js";
-import Otp from "../models/OTP.js";
-import TFA from "../models/TFA.js";
-import Session from "../models/Session.js";
+import User from "../models/User";
+import Otp from "../models/OTP";
+import TFA from "../models/TFA";
+import Session from "../models/Session";
 import "dotenv/config";
 
-import mailHTML from "../dataset/mailHTML.js";
+import mailHTML from "../dataset/mailHTML";
 
 const transporter = nodemailer.createTransport({
     service: "FastMail",
@@ -107,7 +107,7 @@ export default {
 
                 const token = jwt.sign(
                     payload, 
-                    process.env.SECRET, 
+                    process.env.SECRET as string, 
                     { algorithm: 'HS512' }
                 );
 
@@ -186,7 +186,7 @@ export default {
 
                 const token = jwt.sign(
                     payload,
-                    process.env.SECRET,
+                    process.env.SECRET as string,
                     { algorithm: 'HS512' }
                 );
 
@@ -248,7 +248,7 @@ export default {
 
                 const token = jwt.sign( 
                     payload, 
-                    process.env.SECRET, 
+                    process.env.SECRET as string, 
                     { algorithm: 'HS512' }
                 );
 
@@ -304,7 +304,7 @@ export default {
     async verifyIfTokenIsValid(req , res) {
         try {
             const { token, identifier } = req.body;
-            const { sub } = jwt.decode(token);
+            const { sub } = jwt.decode(token) as any;
 
             const findUser = await User.findById(sub._id);
             const sessions = await Session.find({ userId: sub._id });
@@ -335,7 +335,7 @@ export default {
     async removeUserSession(req , res) {
         try {
             const { token, sessionId } = req.body;
-            const { sub } = jwt.decode(token);
+            const { sub } = jwt.decode(token) as any;
 
             const sessions = await Session.find({ userId: sub._id });
             const matchingSession = sessions.find((session) => session.token === token);
@@ -354,7 +354,7 @@ export default {
     async removeAllActiveSessions(req , res) {
         try {
             const { token, identifier } = req.body;
-            const { sub } = jwt.decode(token);
+            const { sub } = jwt.decode(token) as any;
 
             const sessions = await Session.find({ userId: sub._id });
             const matchingSession = sessions.find((session) => session.token === token);
@@ -578,7 +578,7 @@ export default {
 
             const secret = speakeasy.generateSecret({ name: "Noap" });
 
-            qrcode.toDataURL(secret.otpauth_url, async (err, data) => {
+            qrcode.toDataURL(secret.otpauth_url as string, async (err, data) => {
                 if(err) req.status(400).json({ message: "Error generating QR code, please try again or later" });
 
                 await TFA.create({

@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import LabelSchema from '../schemas/LabelSchema.js';
+import LabelSchema from '../schemas/LabelSchema';
 
 import mongoosePaginate from 'mongoose-paginate-v2';
 

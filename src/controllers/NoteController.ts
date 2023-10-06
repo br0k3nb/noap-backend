@@ -1,6 +1,6 @@
-import Note from '../models/Note.js';
-import NoteState from '../models/NoteState.js';
-import Label from '../models/Label.js';
+import Note from '../models/Note';
+import NoteState from '../models/NoteState';
+import Label from '../models/Label';
 import { Types } from 'mongoose';
 
 export default {
@@ -232,6 +232,7 @@ export default {
             const aggregate = Note.aggregate(
                 [
                     {
+                        //@ts-ignore
                         $match: { _id: Types.ObjectId(id) }
                     }, 
                     {

@@ -1,4 +1,4 @@
-import Session from "../models/Session.js";
+import Session from "../models/Session";
 
 export default {
     async view(req, res) {

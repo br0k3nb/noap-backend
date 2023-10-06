@@ -1,4 +1,4 @@
-import Label from '../models/Label.js';
+import Label from '../models/Label';
 
 export default {
     async view(req, res) {
@@ -9,7 +9,7 @@ export default {
             const searchRegex = new RegExp(search, 'i');
             const options = {...filter, sort: {'_id' : 1}};
 
-            const labels = await Label.paginate({
+            const labels = await (Label as any).paginate({
                 $and: [
                     { userId },
                     { 

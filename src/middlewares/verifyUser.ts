@@ -1,7 +1,7 @@
 import jwt from "jsonwebtoken";
 import 'dotenv/config';
 
-import Session from "../models/Session.js";
+import Session from "../models/Session";
 
 export default (req, res, next) => {
   const authorization = req.headers.authorization;
