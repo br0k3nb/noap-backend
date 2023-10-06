@@ -1,13 +1,19 @@
 {
-    "version": 2,
-    "public": true,
-    "routes": [
-      {
-        "src": "./src/(.*)",
-        "dest": "./src/server.js",
-        "headers": {
-          "Access-Control-Allow-Origin": "*" 
-        }
+  "version": 2,
+  "public": true,
+  "builds": [
+    {
+      "src": "./src/server.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "./src/server.js",
+      "headers": {
+        "Access-Control-Allow-Origin": "*" 
       }
-    ]
+    }
+  ]
 }
