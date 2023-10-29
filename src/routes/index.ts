@@ -1,10 +1,10 @@
 import express from 'express'
-import UserController from '../controllers/UserController.js';
-import NoteController from '../controllers/NoteController.js';
-import LabelController from '../controllers/LabelController.js';
-import SessionController from '../controllers/SessionController.js';
+import UserController from '../controllers/UserController';
+import NoteController from '../controllers/NoteController';
+import LabelController from '../controllers/LabelController';
+import SessionController from '../controllers/SessionController';
 
-import verifyUser from '../middlewares/verifyUser.js';
+import verifyUser from '../middlewares/verifyUser';
 
 const router = express.Router();
 

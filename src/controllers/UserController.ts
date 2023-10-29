@@ -1,3 +1,5 @@
+import { Request, Response } from 'express';
+
 import bcrypt from "bcryptjs";
 import qrcode from "qrcode";
 import jwt from "jsonwebtoken";
@@ -7,13 +9,14 @@ import DeviceDetector from "node-device-detector";
 import emojiFlags from 'emoji-flags';
 import axios from "axios";
 
-import User from "../models/User.js";
-import Otp from "../models/OTP.js";
-import TFA from "../models/TFA.js";
-import Session from "../models/Session.js";
-import "dotenv/config";
+import User from "../models/User";
+import Otp from "../models/OTP";
+import TFA from "../models/TFA";
+import Session from "../models/Session";
 
-import mailHTML from "../dataset/mailHTML.js";
+
+import mailHTML from "../dataset/mailHTML";
+import "dotenv/config";
 
 const transporter = nodemailer.createTransport({
     service: "FastMail",
@@ -26,7 +29,7 @@ const transporter = nodemailer.createTransport({
 const SEVEN_DAYS_IN_MS = 604800000;
 
 export default {
-    async add(req, res) {
+    async add(req: Request, res: Response) {
         try {
             const { name, email, password } = req.body;
             const userExists = await User.find({ email });
@@ -50,7 +53,7 @@ export default {
             res.status(400).json({ message: err });
         }
     },
-    async login(req , res) {
+    async login(req: Request, res: Response) {
         try {
             const { email, password, identifier } = req.body;
             const userAgent = req.headers['user-agent'];
@@ -107,7 +110,7 @@ export default {
 
                 const token = jwt.sign(
                     payload, 
-                    process.env.SECRET, 
+                    process.env.SECRET as string, 
                     { algorithm: 'HS512' }
                 );
 
@@ -138,7 +141,7 @@ export default {
             res.status(400).json({ message: err });
         }
     },
-    async googleLogin(req , res) {
+    async googleLogin(req: Request, res: Response) {
         try {
             const { email, name, id, identifier } = req.body;
             const userAgent = req.headers['user-agent'];
@@ -186,7 +189,7 @@ export default {
 
                 const token = jwt.sign(
                     payload,
-                    process.env.SECRET,
+                    process.env.SECRET as string,
                     { algorithm: 'HS512' }
                 );
 
@@ -248,7 +251,7 @@ export default {
 
                 const token = jwt.sign( 
                     payload, 
-                    process.env.SECRET, 
+                    process.env.SECRET as string, 
                     { algorithm: 'HS512' }
                 );
 
@@ -301,10 +304,10 @@ export default {
             return res.status(400).json({ message: err });
         }
     },
-    async verifyIfTokenIsValid(req , res) {
+    async verifyIfTokenIsValid(req: Request, res: Response) {
         try {
             const { token, identifier } = req.body;
-            const { sub } = jwt.decode(token);
+            const { sub } = jwt.decode(token) as any;
 
             const findUser = await User.findById(sub._id);
             const sessions = await Session.find({ userId: sub._id });
@@ -332,10 +335,10 @@ export default {
             res.status(400).json({ message: err });
         }
     },
-    async removeUserSession(req , res) {
+    async removeUserSession(req: Request, res: Response) {
         try {
             const { token, sessionId } = req.body;
-            const { sub } = jwt.decode(token);
+            const { sub } = jwt.decode(token) as any;
 
             const sessions = await Session.find({ userId: sub._id });
             const matchingSession = sessions.find((session) => session.token === token);
@@ -351,10 +354,10 @@ export default {
             res.status(400).json({ message: err });
         }
     },
-    async removeAllActiveSessions(req , res) {
+    async removeAllActiveSessions(req: Request, res: Response) {
         try {
             const { token, identifier } = req.body;
-            const { sub } = jwt.decode(token);
+            const { sub } = jwt.decode(token) as any;
 
             const sessions = await Session.find({ userId: sub._id });
             const matchingSession = sessions.find((session) => session.token === token);
@@ -378,7 +381,7 @@ export default {
             res.status(400).json({ message: err });
         }
     },
-    async signOutUser(req , res) {
+    async signOutUser(req: Request, res: Response) {
         try {
             const { userId, token } = req.body;
 
@@ -396,7 +399,7 @@ export default {
             res.status(400).json({ message: err });
         }
     },
-    async convertIntoNormalAccount(req , res) {
+    async convertIntoNormalAccount(req: Request, res: Response) {
         try {
             const { _id, password } = req.body;
             const getUser = await User.find({ _id });
@@ -417,7 +420,7 @@ export default {
             res.status(400).json({ message: err });
         }
     },
-    async convertIntoGoogleAccount(req , res) {
+    async convertIntoGoogleAccount(req: Request, res: Response) {
         try {
             const { _id, email, name, id } = req.body;
             const getUser = await User.find({ _id });
@@ -446,7 +449,7 @@ export default {
             res.status(400).json({ message: err });
         }
     },
-    async verifyUser(req, res) {
+    async verifyUser(req: Request, res: Response) {
         try {
             const { password, _id } = req.body;
             const findUser = await User.findById({ _id });
@@ -463,7 +466,7 @@ export default {
             res.status(400).json({ message: 'User not authenticated' });
         }
     },
-    async changePassword(res, req) {
+    async changePassword(req: any, res: any) {
         try {
             const { userId, password } = res.body;
             const getUser = await User.find({ _id: userId });
@@ -478,7 +481,7 @@ export default {
            req.status(400).json({ message: err });
         }
     },
-    async findAndSendCode(req, res) {
+    async findAndSendCode(req: Request, res: Response) {
         try {
             const { email, remove2FA } = req.body;
             const userExists = await User.find({ email });
@@ -549,7 +552,7 @@ export default {
             res.status(400).json({ message: err });
         }
     },
-    async verifyOtp(res, req) {
+    async verifyOtp(req: any, res: any) {
         try {
             const { otp, userId } = res.body;
             const findOtp = await Otp.find({ userId });
@@ -568,7 +571,7 @@ export default {
            req.status(400).json({ message: err });
         }
     },
-    async generate2FAQrcode(res, req) {
+    async generate2FAQrcode(req: any, res: any) {
         try {
             const { userId } = res.body;
 
@@ -578,7 +581,7 @@ export default {
 
             const secret = speakeasy.generateSecret({ name: "Noap" });
 
-            qrcode.toDataURL(secret.otpauth_url, async (err, data) => {
+            qrcode.toDataURL(secret.otpauth_url as string, async (err, data) => {
                 if(err) req.status(400).json({ message: "Error generating QR code, please try again or later" });
 
                 await TFA.create({
@@ -600,7 +603,7 @@ export default {
             req.status(400).json({ message: err });
         }
     },
-    async verify2FAcode(res, req) {
+    async verify2FAcode(req: any, res: any) {
         try {
             const { userId, TFACode } = res.body;
             const getTFA = await TFA.find({ userId });
@@ -622,7 +625,7 @@ export default {
             req.status(400).json({ message: err });
         }
     },
-    async remove2FA(res, req) {
+    async remove2FA(req: any, res: any) {
         try {
             const { userId } = res.body;
 
@@ -639,7 +642,7 @@ export default {
             req.status(400).json({ message: err });
         }
     },
-    async showPinnedNotesInFolder(res, req) {
+    async showPinnedNotesInFolder(req: any, res: any) {
         try {
             const { id } = res.params;
             const { condition } = res.body;
@@ -659,7 +662,7 @@ export default {
             req.status(400).json({ message: err });
         }
     },
-    async noteTextExpandedOrCondensed(res, req) {
+    async noteTextExpandedOrCondensed(req: any, res: any) {
         try {
             const { id } = res.params;
             const { condition } = res.body;
@@ -679,7 +682,7 @@ export default {
             req.status(400).json({ message: err });
         }
     },
-    async changeAppTheme(res, req) {
+    async changeAppTheme(req: any, res: any) {
         try {
             const { id } = res.params;
             const { theme } = res.body;
@@ -699,7 +702,7 @@ export default {
             req.status(400).json({ message: err });
         }
     },
-    async changeGlobalNoteBackgroundColor(res, req) {
+    async changeGlobalNoteBackgroundColor(req: any, res: any) {
         try {
             const { id } = res.params;
             const { globalNoteBackgroundColor } = res.body;
@@ -719,7 +722,7 @@ export default {
             req.status(400).json({ message: err });
         }
     },
-    async changeNoteVisualization(res, req) {
+    async changeNoteVisualization(req: any, res: any) {
         try {
             const { id } = res.params;
             const { visualization } = res.body;

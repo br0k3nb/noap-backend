@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import NoteSchema from '../schemas/NoteSchema.js';
+import NoteSchema from '../schemas/NoteSchema';
 
 import mongooseAggregatePaginate from 'mongoose-aggregate-paginate-v2';
 

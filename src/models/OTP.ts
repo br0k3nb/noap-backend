@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import OTPSchema from '../schemas/OTPSchema.js';
+import OTPSchema from '../schemas/OTPSchema';
 
 import mongooseAggregatePaginate from 'mongoose-aggregate-paginate-v2';
 

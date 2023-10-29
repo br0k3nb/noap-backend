@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import TwoFactAuthSchema from '../schemas/TwoFactAuthSchema.js';
+import TwoFactAuthSchema from '../schemas/TwoFactAuthSchema';
 
 import mongooseAggregatePaginate from 'mongoose-aggregate-paginate-v2';
 

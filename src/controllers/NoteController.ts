@@ -1,19 +1,21 @@
-import Note from '../models/Note.js';
-import NoteState from '../models/NoteState.js';
-import Label from '../models/Label.js';
+import { Request, Response } from 'express';
+
 import { Types } from 'mongoose';
+import Note from '../models/Note';
+import NoteState from '../models/NoteState';
+import Label from '../models/Label';
 
 export default {
-    async view(req, res) {
+    async view(req: Request, res: Response) {
         try {
-            const { author, page } = req.params;
+            const { author, page } = req.params as any;
             if(!author || !page) return res.status(404).json({ message: "Access denied!" });
 
-            const { search, limit, pinnedNotesPage } = req.query;
+            const { search, limit, pinnedNotesPage } = req.query as any;
 
-            const searchRegex = new RegExp(search, 'i');
+            const searchRegex = new RegExp(search as string, 'i');
 
-            if(!search.length) {
+            if(!(search as string).length) {
                 const aggregate = Note.aggregate(
                     [
                         {
@@ -143,7 +145,7 @@ export default {
                 return res.status(200).json({ notes, pinnedNotes });
             };
 
-            if(search.length > 0) {
+            if((search as string).length > 0) {
                 const aggregate = Note.aggregate(
                     [
                         {
@@ -224,7 +226,7 @@ export default {
             console.log(err);
         }
     },
-    async getNote(req, res) {
+    async getNote(req: Request, res: Response) {
         try {
             const { id } = req.params;
             const { author } = req.query;
@@ -232,6 +234,7 @@ export default {
             const aggregate = Note.aggregate(
                 [
                     {
+                        //@ts-ignore
                         $match: { _id: Types.ObjectId(id) }
                     }, 
                     {
@@ -290,7 +293,7 @@ export default {
             res.status(400).json({ message: "Error fetching note contents" });
         }
     },
-    async add(req , res) {
+    async add(req: Request , res: Response) {
         try {
             const { name, body, image, state, author, settings } = req.body;
 
@@ -311,7 +314,7 @@ export default {
             res.status(400).json({ message: 'Error creating a new note, please try again or later' });
         }
     },
-    async addLabel(req , res) {
+    async addLabel(req: Request , res: Response) {
         try {
             const { labels, noteId } = req.body;
 
@@ -323,7 +326,7 @@ export default {
             res.status(400).json({ message: 'Error, please try again later!' });
         }
     },
-    async edit(req, res) {
+    async edit(req: Request , res: Response) {
         try {
             const { _id, title, body, image, state, stateId } = req.body;
 
@@ -335,7 +338,7 @@ export default {
             res.status(400).json({ message: 'Error, please try again later!' });
         }
     },
-    async delete(req, res) {
+    async delete(req: Request , res: Response) {
         try {
             const { id } = req.params;
             const { state } = await Note.findById({ _id: id });
@@ -348,7 +351,7 @@ export default {
             res.status(400).json({ message: 'Error, please try again later!' });
         }
     },
-    async deleteLabel(req, res) {
+    async deleteLabel(req: Request, res: Response) {
         try {
             const { id, noteId } = req.params;
 
@@ -356,7 +359,7 @@ export default {
 
             if(!labels) res.status(400).json({ message: "Note wasn't found!"});
 
-            const filtredLabels = labels.filter(_id => _id.toString() !== id);
+            const filtredLabels = labels.filter((_id: string) => _id.toString() !== id);
             
             await Note.findByIdAndUpdate({ _id: noteId }, { labels: filtredLabels });
             
@@ -366,7 +369,7 @@ export default {
             res.status(400).json({ message: 'Error, please try again later!' });
         }
     },
-    async deleteAllLabels(req, res) {
+    async deleteAllLabels(req: Request , res: Response) {
         try {
             const { noteId } = req.params;
             
@@ -377,7 +380,7 @@ export default {
             res.status(400).json({ message: 'Error, please try again later!' });
         }
     },
-    async pinNote(req, res) {
+    async pinNote(req: Request , res: Response) {
         try {
             const { noteId } = req.params;
             const { condition } = req.body;
@@ -393,7 +396,7 @@ export default {
             res.status(400).json({ message: 'Error, please try again later!' });
         }
     },
-    async renameNote(req, res) {
+    async renameNote(req: Request , res: Response) {
         try {
             const { id } = req.params;
             const { name } = req.body;
@@ -405,7 +408,7 @@ export default {
             res.status(400).json({ message: 'Error, please try again later!' });
         }
     },
-    async changeNoteBackgroundColor(res, req) {
+    async changeNoteBackgroundColor(req: any, res: any) {
         try {
             const { noteId } = res.params;
             const { noteBackgroundColor } = res.body;
@@ -425,7 +428,7 @@ export default {
             req.status(400).json({ message: err });
         }
     },
-    async changeNoteImage(res, req) {
+    async changeNoteImage(req: any , res: any) {
         try {
             const { noteId } = res.params;
             const { image } = res.body;

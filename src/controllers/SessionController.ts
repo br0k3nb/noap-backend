@@ -1,7 +1,9 @@
-import Session from "../models/Session.js";
+import { Request, Response } from 'express';
+
+import Session from "../models/Session";
 
 export default {
-    async view(req, res) {
+    async view(req: Request, res: Response) {
         try {
             const { userId } = req.params;
             const getSessions = await Session.find({ userId });
@@ -15,7 +17,7 @@ export default {
             res.status(400).json({ message: err });
         }  
     },
-    async delete(req, res) {
+    async delete(req: Request, res: Response) {
         try {
             const { userId, sessionId } = req.params;
 
@@ -29,7 +31,7 @@ export default {
             res.status(400).json({ message: 'Error, please try again later!' });
         }
     },
-    async deleteAllSessions(req, res) {
+    async deleteAllSessions(req: Request, res: Response) {
         try {
             const { userId } = req.params;
 
