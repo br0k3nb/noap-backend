@@ -1,12 +1,14 @@
+import { Request, Response } from 'express';
+
 import Label from '../models/Label';
 
 export default {
-    async view(req, res) {
+    async view(req: Request, res: Response) {
         try {
             const { userId } = req.params;
             const { search, ...filter } = req.query;
 
-            const searchRegex = new RegExp(search, 'i');
+            const searchRegex = new RegExp(search as string, 'i');
             const options = {...filter, sort: {'_id' : 1}};
 
             const labels = await (Label as any).paginate({
@@ -25,7 +27,7 @@ export default {
             res.status(400).json({ message: err });
         }
     },
-    async add(req , res) {
+    async add(req: Request, res: Response) {
         try {
             const { userId } = req.params;
             const { name, color, fontColor, selectedStyle } = req.body;
@@ -43,7 +45,7 @@ export default {
             res.status(400).json({ message: 'Error, please try again later!' });
         }
     },
-    async edit(req, res) {
+    async edit(req: Request, res: Response) {
         try {
             const { _id, name, color, type } = req.body;
             await Label.findOneAndUpdate({ _id }, { name, color, type });
@@ -53,7 +55,7 @@ export default {
             res.status(400).json({ message: 'Error, please try again later!' });
         }
     },
-    async delete(req, res) {
+    async delete(req: Request, res: Response) {
         try {
             const { id } = req.params;
             await Label.findByIdAndDelete(id);

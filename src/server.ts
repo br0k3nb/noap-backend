@@ -17,4 +17,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(routes);
 
-app.listen(3001, () => console.log(`Server is running at port 3001`));
+app.listen(3002, () => console.log(`Server is running at port 3002`));
+
+export default app;

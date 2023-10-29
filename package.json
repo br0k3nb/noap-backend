@@ -3,21 +3,14 @@
   "version": "1.0.0",
   "description": "",
   "main": "server.ts",
-  "tsup": {
-    "entry": [
-      "./src/server.ts"
-    ],
-    "splitting": false,
-    "sourcemap": true,
-    "clean": false
-  },
   "engines": {
     "node": "18"
   },
   "scripts": {
     "start": "nodemon ./src/server.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "tsup"
+    "build": "yarn install && rimraf dist && tsc",
+    "ts.check": "tsc --project tsconfig.json"
   },
   "author": "Rodrigo Oliveira",
   "license": "ISC",
@@ -54,6 +47,7 @@
     "@types/qrcode": "^1.5.2",
     "@types/speakeasy": "^2.0.8",
     "ts-node": "^10.9.1",
+    "rimraf": "^5.0.1",
     "typescript": "^5.2.2"
   }
 }

@@ -1,9 +1,11 @@
 import jwt from "jsonwebtoken";
-import 'dotenv/config';
-
+import { JwtPayload } from "jsonwebtoken";
+import { NextFunction, Request, Response } from "express";
 import Session from "../models/Session";
 
-export default (req, res, next) => {
+import 'dotenv/config';
+
+export default (req: Request, res: Response, next: NextFunction) => {
   const authorization = req.headers.authorization;
 
   if (!authorization) {
@@ -27,7 +29,7 @@ export default (req, res, next) => {
       return res.status(401).send({ message: "Access denied, sign in again" });
     }
 
-    const sessions = await Session.find({ userId: data.sub._id });
+    const sessions = await Session.find({ userId: (data?.sub as JwtPayload)?._id });
     
     if(!sessions.length) {
       return res.status(401).json({ message: "Access denied, sign in again"});
@@ -39,7 +41,7 @@ export default (req, res, next) => {
       return res.status(401).json({ message: "Access denied, sign in again" });
     }
 
-    if(data.exp < (Date.now() / 1000)) {
+    if((data as any)?.exp < (Date.now() / 1000)) {
       return res.status(401).json({ message: "Session expired, please sign in again" });
     }
 

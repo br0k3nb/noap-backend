@@ -6,7 +6,7 @@
       "module": "commonjs",
       "esModuleInterop": true,
       "forceConsistentCasingInFileNames": true,
-      "noImplicitAny": false,
+      "noImplicitAny": true,
       "strict": true,
       "skipLibCheck": true
     },
