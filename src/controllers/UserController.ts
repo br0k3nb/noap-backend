@@ -466,19 +466,19 @@ export default {
             res.status(400).json({ message: 'User not authenticated' });
         }
     },
-    async changePassword(req: any, res: any) {
+    async changePassword(req: Request, res: Response) {
         try {
-            const { userId, password } = res.body;
+            const { userId, password } = req.body;
             const getUser = await User.find({ _id: userId });
             
-            if(getUser.length === 0) return req.status(400).json({ message: 'User not found, please try again or later!' });
+            if(getUser.length === 0) return res.status(400).json({ message: 'User not found, please try again or later!' });
 
             const hashedPass = await bcrypt.hash(password, 10);
             await User.findOneAndUpdate({ _id: userId }, { password: hashedPass });
 
-            req.status(200).json({ message: 'Password changed!'});
+            res.status(200).json({ message: 'Password changed!'});
         } catch (err) {
-           req.status(400).json({ message: err });
+           res.status(400).json({ message: err });
         }
     },
     async findAndSendCode(req: Request, res: Response) {
@@ -552,37 +552,37 @@ export default {
             res.status(400).json({ message: err });
         }
     },
-    async verifyOtp(req: any, res: any) {
+    async verifyOtp(req: Request, res: Response) {
         try {
-            const { otp, userId } = res.body;
+            const { otp, userId } = req.body;
             const findOtp = await Otp.find({ userId });
 
-            if(findOtp.length === 0) return req.status(400).json({ message: "Wrong OTP code, please try again!"});
+            if(findOtp.length === 0) return res.status(400).json({ message: "Wrong OTP code, please try again!"});
             const compareOTPs = await bcrypt.compare(otp, findOtp[findOtp.length - 1].otp);
 
             if(compareOTPs && findOtp[findOtp.length - 1].expiresAt > Date.now()) {
                 if(findOtp.length > 1) await Otp.deleteMany({ userId, id: findOtp.map(val => val._id)});
                 else await Otp.findByIdAndDelete(findOtp[0]._id);
 
-                return req.status(200).json({ message: "Verified!" });
+                return res.status(200).json({ message: "Verified!" });
             }
-            else return req.status(400).json({ message: "Wrong OTP code, please try again!"});
+            else return res.status(400).json({ message: "Wrong OTP code, please try again!"});
         } catch (err) {
-           req.status(400).json({ message: err });
+           res.status(400).json({ message: err });
         }
     },
-    async generate2FAQrcode(req: any, res: any) {
+    async generate2FAQrcode(req: Request, res: Response) {
         try {
-            const { userId } = res.body;
+            const { userId } = req.body;
 
             const getQrcodes = await TFA.find({ userId });
 
-            if(getQrcodes.length > 0) return req.status(200).json(getQrcodes[0].qrcode);
+            if(getQrcodes.length > 0) return res.status(200).json(getQrcodes[0].qrcode);
 
             const secret = speakeasy.generateSecret({ name: "Noap" });
 
             qrcode.toDataURL(secret.otpauth_url as string, async (err, data) => {
-                if(err) req.status(400).json({ message: "Error generating QR code, please try again or later" });
+                if(err) res.status(400).json({ message: "Error generating QR code, please try again or later" });
 
                 await TFA.create({
                     qrcode: data,
@@ -595,17 +595,17 @@ export default {
                 const [ doc ] = await TFA.find({ userId }); //getting the id of the created TFA document
                 await User.findOneAndUpdate({ _id: userId }, { TFAStatus: doc._id });
 
-                return req.status(200).json(data);
+                return res.status(200).json(data);
             });
 
         } catch (err) {
             console.log(err);
-            req.status(400).json({ message: err });
+            res.status(400).json({ message: err });
         }
     },
-    async verify2FAcode(req: any, res: any) {
+    async verify2FAcode(req: Request, res: Response) {
         try {
-            const { userId, TFACode } = res.body;
+            const { userId, TFACode } = req.body;
             const getTFA = await TFA.find({ userId });
 
             const isAValidTFACode = speakeasy.totp.verify({
@@ -616,36 +616,36 @@ export default {
 
             if(isAValidTFACode) {
                 await TFA.findByIdAndUpdate({ _id: getTFA[0]._id }, { verified: true });
-                return req.status(200).json({ message: "Verified!" });
+                return res.status(200).json({ message: "Verified!" });
             }
 
-            return req.status(400).json({ message: "Wrong code, please try again" });
+            return res.status(401).json({ message: "Wrong code, please try again" });
         } catch (err) {
             console.log(err);
-            req.status(400).json({ message: err });
+            res.status(400).json({ message: err });
         }
     },
-    async remove2FA(req: any, res: any) {
+    async remove2FA(req: Request, res: Response) {
         try {
-            const { userId } = res.body;
+            const { userId } = req.body;
 
             const getTFA = await TFA.find({ userId });
 
-            if(getTFA.length === 0) return req.status(400).json({ message: "This account doesn't have 2FA enabled!" });
+            if(getTFA.length === 0) return res.status(400).json({ message: "This account doesn't have 2FA enabled!" });
 
             await TFA.remove({ _id: getTFA[0]._id });
             await User.findByIdAndUpdate({ _id: getTFA[0].userId }, { TFAStatus: undefined });
 
-            return req.status(200).json({ message: "2FA removed successfuly!" });
+            return res.status(200).json({ message: "2FA removed successfuly!" });
         } catch (err) {
             console.log(err);
-            req.status(400).json({ message: err });
+            res.status(400).json({ message: err });
         }
     },
-    async showPinnedNotesInFolder(req: any, res: any) {
+    async showPinnedNotesInFolder(req: Request, res: Response) {
         try {
-            const { id } = res.params;
-            const { condition } = res.body;
+            const { id } = req.params;
+            const { condition } = req.body;
 
             const getUserData = await User.findById(id);
 
@@ -656,16 +656,16 @@ export default {
                 }
             });
 
-            return req.status(200).json({ message: "Updated!" });
+            return res.status(200).json({ message: "Updated!" });
         } catch (err) {
             console.log(err);
-            req.status(400).json({ message: err });
+            res.status(400).json({ message: err });
         }
     },
-    async noteTextExpandedOrCondensed(req: any, res: any) {
+    async noteTextExpandedOrCondensed(req: Request, res: Response) {
         try {
-            const { id } = res.params;
-            const { condition } = res.body;
+            const { id } = req.params;
+            const { condition } = req.body;
 
             const getUserData = await User.findById(id);
 
@@ -676,16 +676,16 @@ export default {
                 }
             });
 
-            return req.status(200).json({ message: "Updated!" });
+            return res.status(200).json({ message: "Updated!" });
         } catch (err) {
             console.log(err);
-            req.status(400).json({ message: err });
+            res.status(400).json({ message: err });
         }
     },
-    async changeAppTheme(req: any, res: any) {
+    async changeAppTheme(req: Request, res: Response) {
         try {
-            const { id } = res.params;
-            const { theme } = res.body;
+            const { id } = req.params;
+            const { theme } = req.body;
 
             const getUserData = await User.findById(id);
 
@@ -696,16 +696,16 @@ export default {
                 }
             });
 
-            return req.status(200).json({ message: "Updated!" });
+            return res.status(200).json({ message: "Updated!" });
         } catch (err) {
             console.log(err);
-            req.status(400).json({ message: err });
+            res.status(400).json({ message: err });
         }
     },
-    async changeGlobalNoteBackgroundColor(req: any, res: any) {
+    async changeGlobalNoteBackgroundColor(req: Request, res: Response) {
         try {
-            const { id } = res.params;
-            const { globalNoteBackgroundColor } = res.body;
+            const { id } = req.params;
+            const { globalNoteBackgroundColor } = req.body;
 
             const getUserData = await User.findById(id);
 
@@ -716,16 +716,16 @@ export default {
                 }
             });
 
-            return req.status(200).json({ message: "Updated!" });
+            return res.status(200).json({ message: "Updated!" });
         } catch (err) {
             console.log(err);
-            req.status(400).json({ message: err });
+            res.status(400).json({ message: err });
         }
     },
-    async changeNoteVisualization(req: any, res: any) {
+    async changeNoteVisualization(req: Request, res: Response) {
         try {
-            const { id } = res.params;
-            const { visualization } = res.body;
+            const { id } = req.params;
+            const { visualization } = req.body;
 
             const getUserData = await User.findById(id);
 
@@ -736,10 +736,10 @@ export default {
                 }
             });
 
-            return req.status(200).json({ message: "Updated!" })
+            return res.status(200).json({ message: "Updated!" })
         } catch (err) {
             console.log(err);
-            req.status(400).json({ message: err });
+            res.status(400).json({ message: err });
         }
     },
 }

@@ -3,7 +3,6 @@ import { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import Note from '../models/Note';
 import NoteState from '../models/NoteState';
-import Label from '../models/Label';
 
 export default {
     async view(req: Request, res: Response) {
@@ -410,10 +409,10 @@ export default {
             res.status(400).json({ message: 'Error, please try again later!' });
         }
     },
-    async changeNoteBackgroundColor(req: any, res: any) {
+    async changeNoteBackgroundColor(req: Request, res: Response) {
         try {
-            const { noteId } = res.params;
-            const { noteBackgroundColor } = res.body;
+            const { noteId } = req.params;
+            const { noteBackgroundColor } = req.body;
 
             const getNoteData = await Note.findById(noteId);
 
@@ -424,23 +423,23 @@ export default {
                 }
             });
 
-            return req.status(200).json({ message: "Updated!" });
+            return res.status(200).json({ message: "Updated!" });
         } catch (err) {
             console.log(err);
-            req.status(400).json({ message: err });
+            res.status(400).json({ message: err });
         }
     },
-    async changeNoteImage(req: any , res: any) {
+    async changeNoteImage(req: Request, res: Response) {
         try {
-            const { noteId } = res.params;
-            const { image } = res.body;
+            const { noteId } = req.params;
+            const { image } = req.body;
 
             await Note.findByIdAndUpdate({ _id: noteId }, { image });
 
-            return req.status(200).json({ message: "Updated!" });
+            return res.status(200).json({ message: "Updated!" });
         } catch (err) {
             console.log(err);
-            req.status(400).json({ message: err });
+            res.status(400).json({ message: err });
         }
     },
 }
