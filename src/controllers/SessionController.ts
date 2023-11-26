@@ -39,7 +39,7 @@ export default {
                 return res.status(401).json({ message: "Invalid request"});
             }
 
-            await Session.remove({ userId });
+            await Session.deleteMany({ userId });
             return res.status(200).json({ 
                 message: "All sessions (including yours), were terminated, please sign in again!" 
             });
