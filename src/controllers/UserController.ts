@@ -69,6 +69,10 @@ export default {
                 return res.status(400).json({ message: 'Wrong email or password combination!' });
             }
 
+            const { _id, name, TFAStatus, settings, googleAccount } = getUser[0];
+
+            if(googleAccount) return res.status(400).json({ message: "The selected sign in method isn't available to this email!" });
+
             const device = new DeviceDetector({
                 clientIndexes: true,
                 deviceIndexes: true,
@@ -89,12 +93,9 @@ export default {
                     city
                 } 
             } = await axios.get(`https://api.ipgeolocation.io/ipgeo?apiKey=${process.env.IPGEOLOCATION_KEY}&ip=${identifier}`);
-            
-            const { _id, name, TFAStatus, settings, theme } = getUser[0];
 
             if(TFAStatus) {
                 const TFAStatus = await TFA.find({ _id: getUser[0]?.TFAStatus });
-
                 TFAEnabled = TFAStatus[0].verified;
             }
 
