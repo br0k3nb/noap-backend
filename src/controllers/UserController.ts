@@ -19,11 +19,15 @@ import mailHTML from "../dataset/mailHTML";
 import "dotenv/config";
 
 const transporter = nodemailer.createTransport({
-    service: "FastMail",
+    //@ts-ignore
+    host:process.env.MAIL_HOSTNAME,
+    port: process.env.MAIL_PORT,
+    secure: false,
+    name: "noap",
     auth: {
-        user: process.env.HOST_MAIL,
-        pass: process.env.HOST_MAIL_PASSWORD
-    }
+        user: process.env.MAIL_USERNAME,
+        pass: process.env.MAIL_PASSWORD
+    },
 });
 
 const SEVEN_DAYS_IN_MS = 604800000;
@@ -487,8 +491,8 @@ export default {
             const { email, remove2FA } = req.body;
             const userExists = await User.find({ email });
 
-            if(userExists.length === 0) return res.status(400).json({
-                message: 'No users were found with this email address!', 
+            if(userExists.length === 0) return res.status(200).json({
+                message: 'If an account with this email exists, the code will be sent',
                 code: 1
             });
 
@@ -500,7 +504,7 @@ export default {
             }
 
             if(!TFAStatus && remove2FA === "2fa") {
-                return res.status(400).json({ message: "This account doesn't have 2FA enabled!" });
+                return res.status(200).json({ message: "If an account with this email exists, the code will be sent" });
             }
 
             const findOtp = await Otp.find({ userId: _id });
@@ -517,11 +521,12 @@ export default {
                 const message = {
                     from: process.env.HOST_MAIL,
                     to: userMail,
-                    subject: 'OTP code verification',
+                    subject: 'Noap OTP code verification',
                     html: mailHTML(otpCode, name)
                 }
 
                 transporter.sendMail(message, async (error) => {
+                    console.log(error);
                     if(error) res.status(500).json({ message: "Internal sever error, please try again or later", code: 2 });
                     else {
                         await Otp.create({
@@ -531,7 +536,7 @@ export default {
                             spam: Date.now() + 120000 //adding spam protection of 2 minutes per email
                         });
 
-                        res.status(200).json({ message: 'Email sent!', userId: _id });
+                        res.status(200).json({ message: 'If an account with this email exists, the code will be sent', userId: _id });
                     }
                 });
             }
