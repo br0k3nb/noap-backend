@@ -29,6 +29,10 @@ export default new mongoose.Schema({
         type: Boolean,
         required: false
     },
+    lastOpenedNote: {
+        type: mongoose.Schema.Types.ObjectId,
+        required: false,
+    },
     settings: {
         showPinnedNotesInFolder: {
             type: Boolean,
@@ -40,6 +44,10 @@ export default new mongoose.Schema({
         },
         globalNoteBackgroundColor: {
             type: String,
+            required: false,
+        },
+        onLoginGoToLastOpenedNote: {
+            type: Boolean,
             required: false,
         },
         noteVisualization: {

@@ -73,7 +73,7 @@ export default {
                 return res.status(400).json({ message: 'Wrong email or password combination!' });
             }
 
-            const { _id, name, TFAStatus, settings, googleAccount } = getUser[0];
+            const { _id, name, TFAStatus, settings, googleAccount, lastOpenedNote } = getUser[0];
 
             if(googleAccount) return res.status(400).json({ message: "The selected sign in method isn't available to this email!" });
 
@@ -137,6 +137,7 @@ export default {
                     name, 
                     TFAEnabled, 
                     settings,
+                    lastOpenedNote,
                 });
             }
 
@@ -748,4 +749,41 @@ export default {
             res.status(400).json({ message: err });
         }
     },
+    async lastOpenedNote(req: Request, res: Response) {
+        try {
+            const { id } = req.params;
+            const { lastOpenedNote } = req.body;
+
+            if(!id || !lastOpenedNote) return res.status(401).json({ message: "Invalid request!" });
+
+            await User.findByIdAndUpdate({ _id: id }, { lastOpenedNote });
+
+            return res.status(200).json({ message: "Updated!" });
+        } catch (err) {
+            console.log(err);
+            res.status(400).json({ message: err });
+        }
+    },
+    async onLoginGoToLastOpenedNote(req: Request, res: Response) {
+        try {
+            const { id } = req.params;
+            const { onLoginGoToLastOpenedNote } = req.body;
+
+            if(!id) return res.status(401).json({ message: "Invalid request!" });
+
+            const getUserData = await User.findById(id);
+
+            await User.findByIdAndUpdate({ _id: id }, {
+                settings: {                    
+                    ...getUserData.settings,
+                    onLoginGoToLastOpenedNote
+                }
+            });
+
+            return res.status(200).json({ message: "Updated!" });
+        } catch (err) {
+            console.log(err);
+            res.status(400).json({ message: err });
+        }
+    }
 }

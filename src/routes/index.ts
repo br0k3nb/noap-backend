@@ -21,12 +21,14 @@ router.post("/sign-out", verifyUser, UserController.signOutUser);
 router.post("/verify-user", verifyUser, UserController.verifyUser);
 router.post("/2fa/qrcode", verifyUser, UserController.generate2FAQrcode);
 router.post("/verify-token", verifyUser, UserController.verifyIfTokenIsValid);
+router.patch("/lastOpenedNote/:id", verifyUser, UserController.lastOpenedNote);
 router.patch("/convert/account/email", UserController.convertIntoNormalAccount);
 router.patch("/convert/account/google", UserController.convertIntoGoogleAccount);
 router.patch("/settings/change-theme/:id", verifyUser, UserController.changeAppTheme);
 router.post("/settings/note-text/:id", verifyUser, UserController.noteTextExpandedOrCondensed);
 router.post("/settings/pin-notes-folder/:id", verifyUser, UserController.showPinnedNotesInFolder);
 router.patch("/settings/note-visualization/:id", verifyUser, UserController.changeNoteVisualization);
+router.patch("/settings/onLoginGoToLastOpenedNote/:id", verifyUser, UserController.onLoginGoToLastOpenedNote);
 router.patch("/settings/global-note-background-color/:id", verifyUser, UserController.changeGlobalNoteBackgroundColor);
 
 //Sessions
