@@ -1,0 +1,33 @@
+# Version control and local tooling
+.git
+.gitignore
+.agents
+.codex
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Local dependencies and build output
+target
+node_modules
+coverage
+build
+dist
+
+# Logs and editor/OS metadata
+*.log
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+
+# Legacy Node.js project files are not needed by the Rust image.
+api
+public
+package.json
+package-lock.json
+yarn.lock
+tsconfig.json
+vercel.json
