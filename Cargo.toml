@@ -9,11 +9,16 @@ license = "ISC"
 name = "noap-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "noap-vercel"
+path = "api/index.rs"
+
 [dependencies]
-axum = { version = "0.7", features = ["json", "macros"] }
+axum = { version = "0.8", features = ["json", "macros"] }
 tokio = { version = "1.38", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
+vercel_runtime = { version = "2.4", features = ["axum"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 mongodb = { version = "3.1", default-features = false, features = ["compat-3-0-0", "rustls-tls", "dns-resolver"] }

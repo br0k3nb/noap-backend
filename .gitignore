@@ -29,3 +29,4 @@ yarn-error.log*
 Thumbs.db
 
 # Cargo.lock is intentionally tracked because this repository builds an application.
+.vercel/

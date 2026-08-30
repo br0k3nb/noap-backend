@@ -4,7 +4,7 @@
   "description": "",
   "main": "server.ts",
   "engines": {
-    "node": "18"
+    "node": "24.x"
   },
   "scripts": {
     "start": "nodemon ./src/server.ts",

@@ -9,7 +9,7 @@
 
 ## Stack
 - **Runtime:** Rust 1.82+ (tested on 1.97, Node 24/26 not required for backend)
-- **Web:** Axum 0.7 + Tokio + Tower-HTTP (CORS, Trace)
+- **Web:** Axum 0.8 + Tokio + Tower-HTTP (CORS, Trace)
 - **DB:** MongoDB (official `mongodb` 3.1 driver, `bson` 2.15) — same collections as the Node version (`users`, `notes`, `noteStates`, `labels`, `sessions`, `otps`, `2fa`)
 - **Auth:** `jsonwebtoken` HS512 + `bcrypt` 0.17, middleware `verify_user`
 - **Mail:** `lettre` 0.11 (SMTP, HTML OTP from `utils/mail.rs`)
@@ -125,8 +125,10 @@ Auth = `Authorization: Bearer <JWT>` + session existence + `exp` check (same as 
 noap-backend/
 ├── Cargo.toml          # Rust manifest (replaces package.json for runtime)
 ├── package.json        # kept for reference / legacy Node tooling
+├── api/index.rs        # Vercel Rust Function entrypoint
 ├── src/
-│   ├── main.rs         # Axum router, CORS, DB init, 30+ routes
+│   ├── lib.rs          # shared Axum router, CORS, DB init, 30+ routes
+│   ├── main.rs         # local/Docker TCP server entrypoint
 │   ├── models.rs       # User, Note, NoteState, Label, Session, Otp, Tfa
 │   ├── handlers/
 │   │   ├── user.rs     # sign_up, sign_in, google_login, OTP, TFA, settings…
@@ -136,7 +138,7 @@ noap-backend/
 │   ├── middleware/auth.rs
 │   └── utils/{mail,geo,flag,crypto}.rs
 ├── .env.example
-└── vercel.json         # rewrites (unchanged, adapt for Rust if deploying)
+└── vercel.json         # native Rust Function build and catch-all rewrite
 ```
 
 ## Why Rust?
@@ -152,7 +154,7 @@ The original Express code is still in `src/server.ts` / `src/controllers/*` / `s
 ## Deploy
 
 - **Docker:** `cargo build --release` → `FROM debian:bookworm-slim` + binary + `.env`
-- **Vercel:** Use `vercel-rust` runtime or deploy binary to Fly.io / Render. Keep `vercel.json` rewrites.
+- **Vercel:** The native Rust runtime compiles `api/index.rs`; `vercel.json` rewrites all API paths to that Axum function. Deploy with `vercel deploy` for Preview or `vercel deploy --prod` for Production. No legacy community runtime is required.
 
 ## License
 

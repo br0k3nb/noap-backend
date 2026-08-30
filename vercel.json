@@ -1,3 +1,17 @@
 {
-  "rewrites": [{ "source": "/(.*)", "destination": "/api" }]
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "",
+  "buildCommand": "true",
+  "functions": {
+    "api/index.rs": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index"
+    }
+  ]
 }
