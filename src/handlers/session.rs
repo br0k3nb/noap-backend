@@ -29,8 +29,11 @@ pub async fn view(
         )
     })?;
     let coll = state.db.collection::<Session>("sessions");
+    // Match BOTH userId forms: current rows store an ObjectId, but legacy
+    // rows store the hex string. Querying only one form yields a falsely
+    // empty list (HTTP 500) while the user is demonstrably authenticated.
     let sessions: Vec<Session> = coll
-        .find(doc! {"userId": uid})
+        .find(doc! {"$or": [{"userId": uid}, {"userId": userId}]})
         .await
         .map_err(|e| {
             tracing::error!("DB error listing sessions: {}", e);
@@ -98,7 +101,7 @@ pub async fn delete_one(
     state
         .db
         .collection::<Session>("sessions")
-        .delete_one(doc! {"_id": sid, "userId": uid})
+        .delete_one(doc! {"_id": sid, "$or": [{"userId": uid}, {"userId": userId}]})
         .await
         .map_err(|e| {
             tracing::error!("DB error deleting session: {}", e);
@@ -134,7 +137,9 @@ pub async fn delete_all(
     state
         .db
         .collection::<Session>("sessions")
-        .delete_many(doc! {"userId": uid})
+        // Both userId forms: otherwise legacy string-keyed rows survive a
+        // "terminate all" and stay valid while the user believes they're dead.
+        .delete_many(doc! {"$or": [{"userId": uid}, {"userId": userId}]})
         .await
         .map_err(|e| {
             tracing::error!("DB error deleting sessions: {}", e);

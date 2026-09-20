@@ -1595,8 +1595,12 @@ pub async fn sign_out(
     if let Some((token, _)) = request_session_token(&headers) {
         // Best effort: the session row may already be gone (e.g. after
         // "terminate all sessions"); logout still succeeds and clears cookies.
+        // Both userId forms: legacy string-keyed rows must die on logout too.
         let coll = state.db.collection::<Session>("sessions");
-        if let Err(e) = coll.delete_one(doc! {"userId": uid, "token": token.as_str()}).await {
+        if let Err(e) = coll
+            .delete_one(doc! {"token": token.as_str(), "$or": [{"userId": uid}, {"userId": claims.sub}]})
+            .await
+        {
             tracing::warn!("sign-out session cleanup failed: {}", e);
         }
     }
