@@ -154,6 +154,7 @@ noap-backend/
 
 - **Docker:** `cargo build --release` → `FROM debian:bookworm-slim` + binary + `.env`
 - **Vercel:** The native Rust runtime compiles `api/index.rs`; `vercel.json` rewrites all API paths to that Axum function. Deploy with `vercel deploy` for Preview or `vercel deploy --prod` for Production. No legacy community runtime is required.
+  > **One-time dashboard step:** this repo has no `package.json`, so Vercel falls back to the **Project Settings → Build and Deployment → Node.js Version** for its build container (Node is provisioned even for Rust-only builds). If it still points at a discontinued version (e.g. `18.x`), deployments fail with `Found invalid or discontinued Node.js Version`. Set it to **24.x** once — no Node files are added to the repo by this.
 
 ## License
 
