@@ -187,8 +187,9 @@ pub async fn verify_user(
             "No matching session in user sessions, trying by_token fallback for token prefix {}",
             &token[..20.min(token.len())]
         );
-        // Try string userId collections (OTP userId is string)
-        // Also fallback to find by token directly
+        // Legacy rows may store userId as a string, invisible to the
+        // ObjectId query above. Accept the row ONLY if it belongs to this
+        // subject and hasn't expired server-side.
         let by_token = coll.find_one(doc! { "token": token.as_str() }).await.map_err(|e| {
             tracing::error!("DB find_one by_token error: {:?}", e);
             (
@@ -197,12 +198,33 @@ pub async fn verify_user(
             )
         })?;
         tracing::info!("by_token found: {}", by_token.is_some());
-        if by_token.is_none() {
-            tracing::warn!("No session found for token, returning 401");
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"message": "Access denied, sign in again"})),
-            ));
+        match by_token {
+            Some(row) if row.userId.to_hex() == claims.sub => {
+                tracing::warn!("Accepted legacy string-userId session row for {}", claims.sub);
+                let now = chrono::Utc::now().timestamp();
+                if row.expAt < now {
+                    return Err((
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({"message": "Session expired, please sign in again"})),
+                    ));
+                }
+                req.extensions_mut().insert(claims.clone());
+                return Ok(next.run(req).await);
+            }
+            Some(_) => {
+                tracing::warn!("Denying request: token row belongs to another user");
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"message": "Access denied, sign in again"})),
+                ));
+            }
+            None => {
+                tracing::warn!("No session found for token, returning 401");
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"message": "Access denied, sign in again"})),
+                ));
+            }
         }
     }
 

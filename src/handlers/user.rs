@@ -792,17 +792,46 @@ pub async fn verify_token(
                 crate::utils::db_err_json(e),
             )
         })?;
-    if sessions.is_empty() {
-        return Err((
+    // NOTE: no early return when `sessions` is empty — legacy rows with a
+    // string userId are invisible to the ObjectId query above and are
+    // resolved by the token fallback below.
+    let matching = sessions.iter().find(|s| s.token == token);
+    // Legacy tolerance: some old rows store userId as a string and are
+    // invisible to the ObjectId query above (the custom ObjectId
+    // deserializer still reads them fine). Fall back to a direct token
+    // lookup, but KEEP the ownership check: the row must belong to this
+    // subject, otherwise deny.
+    let mut fallback_row: Option<Session> = None;
+    if matching.is_none() {
+        tracing::warn!(
+            "No session matched under ObjectId userId for verify-token; trying legacy token lookup"
+        );
+        fallback_row = sess_coll
+            .find_one(doc! {"token": token.as_str()})
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    crate::utils::db_err_json(e),
+                )
+            })?;
+        if let Some(row) = &fallback_row {
+            if row.userId.to_hex() != claims.sub {
+                tracing::warn!("Denying verify-token: token row belongs to another user");
+                fallback_row = None;
+            } else {
+                tracing::warn!("Accepted legacy string-userId session row for verify-token");
+            }
+        }
+    }
+    let matching: &Session = sessions
+        .iter()
+        .find(|s| s.token == token)
+        .or(fallback_row.as_ref())
+        .ok_or((
             StatusCode::UNAUTHORIZED,
             Json(json!({"message": "Access denied, sign in again"})),
-        ));
-    }
-    let matching = sessions.iter().find(|s| s.token == token);
-    let matching = matching.ok_or((
-        StatusCode::UNAUTHORIZED,
-        Json(json!({"message": "Access denied, sign in again"})),
-    ))?;
+        ))?;
     // Enforce server-side session expiry: a stolen long-lived token stops
     // working once its session record expires, even if the JWT itself hasn't.
     if matching.expAt < Utc::now().timestamp() {
