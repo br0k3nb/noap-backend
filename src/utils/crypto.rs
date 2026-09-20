@@ -143,3 +143,95 @@ pub fn decode_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::e
     )?;
     Ok(data.claims)
 }
+
+// ---------- Password-reset / 2FA-reset tokens ----------
+// Short-lived, single-purpose JWTs issued by verify_otp as proof of email
+// ownership. They authorize /change-pass and /2fa/remove when the caller
+// has no session (account-recovery flow). Authenticated callers instead use
+// their normal session, so a stolen reset token is useless after 15 min.
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ResetClaims {
+    iss: String,
+    sub: String, // user id
+    purpose: String,
+    exp: usize,
+}
+
+const RESET_ISSUER: &str = "noap-reset";
+const RESET_PURPOSE: &str = "password-reset";
+/// Reset tokens live 15 minutes.
+const RESET_TTL_SECS: i64 = 15 * 60;
+
+pub fn create_reset_token(user_id: &str, secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
+    let header = Header::new(Algorithm::HS512);
+    let claims = ResetClaims {
+        iss: RESET_ISSUER.to_string(),
+        sub: user_id.to_string(),
+        purpose: RESET_PURPOSE.to_string(),
+        exp: (Utc::now().timestamp() + RESET_TTL_SECS) as usize,
+    };
+    jsonwebtoken::encode(&header, &claims, &EncodingKey::from_secret(secret.as_bytes()))
+}
+
+/// Returns the user id if `token` is a valid, unexpired reset token.
+pub fn verify_reset_token(token: &str, secret: &str) -> Option<String> {
+    let mut validation = Validation::new(Algorithm::HS512);
+    validation.set_issuer(&[RESET_ISSUER]);
+    let data = jsonwebtoken::decode::<ResetClaims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .ok()?;
+    if data.claims.purpose != RESET_PURPOSE {
+        return None;
+    }
+    Some(data.claims.sub)
+}
+
+// ---------- 2FA-pending tokens ----------
+// Issued (as an HttpOnly cookie, never in JS) after a correct password when
+// the account has 2FA enabled. It proves "password OK, 2FA still pending" and
+// is the ONLY credential accepted to mint the real session in /2fa/verify.
+// Lifetime is 10 minutes; it can never be used as a session itself.
+
+const TFA_ISSUER: &str = "noap-tfa";
+const TFA_PURPOSE: &str = "tfa-pending";
+/// 2FA-pending tokens live 10 minutes.
+pub const TFA_TTL_SECS: i64 = 10 * 60;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct TfaClaims {
+    iss: String,
+    sub: String, // user id
+    purpose: String,
+    exp: usize,
+}
+
+pub fn create_tfa_token(user_id: &str, secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
+    let header = Header::new(Algorithm::HS512);
+    let claims = TfaClaims {
+        iss: TFA_ISSUER.to_string(),
+        sub: user_id.to_string(),
+        purpose: TFA_PURPOSE.to_string(),
+        exp: (Utc::now().timestamp() + TFA_TTL_SECS) as usize,
+    };
+    jsonwebtoken::encode(&header, &claims, &EncodingKey::from_secret(secret.as_bytes()))
+}
+
+/// Returns the user id if `token` is a valid, unexpired 2FA-pending token.
+pub fn verify_tfa_token(token: &str, secret: &str) -> Option<String> {
+    let mut validation = Validation::new(Algorithm::HS512);
+    validation.set_issuer(&[TFA_ISSUER]);
+    let data = jsonwebtoken::decode::<TfaClaims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .ok()?;
+    if data.claims.purpose != TFA_PURPOSE {
+        return None;
+    }
+    Some(data.claims.sub)
+}

@@ -8,14 +8,14 @@
 > This is the **Rust port** of the original Noap backend (Node/Express/Mongoose). The entire API has been re-implemented in Rust with **Axum + MongoDB** and is a drop-in replacement for the Node server. It exposes the **identical HTTP contract** so the existing React frontend (`/noap`) works without changes.
 
 ## Stack
-- **Runtime:** Rust 1.82+ (tested on 1.97, Node 24/26 not required for backend)
+- **Runtime:** Rust 1.82+ (tested on 1.97) — no Node.js anywhere in this backend
 - **Web:** Axum 0.8 + Tokio + Tower-HTTP (CORS, Trace)
 - **DB:** MongoDB (official `mongodb` 3.1 driver, `bson` 2.15) — same collections as the Node version (`users`, `notes`, `noteStates`, `labels`, `sessions`, `otps`, `2fa`)
 - **Auth:** `jsonwebtoken` HS512 + `bcrypt` 0.17, middleware `verify_user`
 - **Mail:** `lettre` 0.11 (SMTP, HTML OTP from `utils/mail.rs`)
 - **2FA:** `totp-rs` 5.6 + `qrcode` 0.14 (`generate_2fa_qrcode`, `verify_2fa_code`)
 - **Geo/IP:** `reqwest` → `https://api.ipgeolocation.io/ipgeo`
-- **Device:** `uaparser` (UA → browser/client/device), `country_code_to_flag` for emoji
+- **Device:** raw user-agent stored per session, country flag emoji from geo lookup
 
 ## Prerequisites
 - Rust 1.82+ (`rustup`), Cargo
@@ -47,7 +47,10 @@ npm install && npm run dev   # expects VITE_API_URL=http://0.0.0.0:3002 or defau
 | Var | Required | Default | Description |
 |-----|----------|---------|-------------|
 | `MONGODB_URL` | **yes** | — | MongoDB connection string (e.g. `mongodb://localhost:27017/noap` or Atlas) |
-| `SECRET` | **yes** | `secret` | JWT HS512 secret (64+ chars) |
+| `SECRET` | **yes** | — | JWT HS512 secret (64+ chars, no default — startup fails without it) |
+| `ALLOWED_ORIGINS` | **yes in prod** | localhost dev origins | Exact frontend origin(s), comma-separated, e.g. `https://noap.vercel.app` |
+| `COOKIE_SECURE` | no | `true` | Set `false` for plain-http local dev (SameSite auto-downgrades to Lax) |
+| `COOKIE_SAMESITE` | no | `None` | `None` (cross-site, requires Secure) or `Lax` |
 | `MAIL_HOSTNAME` | no | — | SMTP host (OTP mails skipped if empty) |
 | `MAIL_PORT` | no | 587 | SMTP port |
 | `MAIL_USERNAME` | no | — | SMTP user |
@@ -74,10 +77,10 @@ PATCH  /change-pass
 POST   /sign-out              (auth)
 POST   /verify-user           (auth)
 POST   /2fa/qrcode            (auth)
-POST   /verify-token          (auth)
+POST   /verify-token          (public, self-validating: cookie/Bearer, one-time legacy body token)
 PATCH  /lastOpenedNote/:id    (auth)
-PATCH  /convert/account/email
-PATCH  /convert/account/google
+PATCH  /convert/account/email (auth)
+PATCH  /convert/account/google (auth)
 PATCH  /settings/change-theme/:id                (auth)
 POST   /settings/note-text/:id                   (auth)
 POST   /settings/pin-notes-folder/:id            (auth)
@@ -117,14 +120,14 @@ PATCH  /label/edit/:userId                       (auth)
 DELETE /label/delete/:id                         (auth)
 ```
 
-Auth = `Authorization: Bearer <JWT>` + session existence + `exp` check (same as `src/middlewares/verifyUser.ts`).
+Auth = HttpOnly session cookie (`noap_session`) or `Authorization: Bearer <JWT>` + session existence + `exp`/`expAt` checks (see `src/middleware/auth.rs`). Cookie-authed state-changing requests additionally require an allowlisted `Origin`/`Referer` (CSRF guard). Brute-forceable public endpoints (`/sign-in`, `/sign-in/google`, `/find-user`, `/verify-otp`, `/2fa/verify`) are per-IP rate-limited.
 
 ## Project layout
 
 ```
 noap-backend/
-├── Cargo.toml          # Rust manifest (replaces package.json for runtime)
-├── package.json        # kept for reference / legacy Node tooling
+├── Cargo.toml          # Rust manifest — the only backend toolchain
+├── Cargo.lock          # tracked: reproducible application builds
 ├── api/index.rs        # Vercel Rust Function entrypoint
 ├── src/
 │   ├── lib.rs          # shared Axum router, CORS, DB init, 30+ routes
@@ -136,7 +139,7 @@ noap-backend/
 │   │   ├── label.rs    # view, add, edit, delete
 │   │   └── session.rs  # view, delete, delete_all
 │   ├── middleware/auth.rs
-│   └── utils/{mail,geo,flag,crypto}.rs
+│   └── utils/{mail,geo,flag,crypto,cookies,ratelimit}.rs
 ├── .env.example
 └── vercel.json         # native Rust Function build and catch-all rewrite
 ```
@@ -146,10 +149,6 @@ noap-backend/
 - Memory safety + fearless concurrency (Tokio)
 - 10–20× lower memory, faster cold starts than Node
 - Single static binary (`cargo build --release`) — no `node_modules`, no `tsc`
-
-## Legacy Node
-
-The original Express code is still in `src/server.ts` / `src/controllers/*` / `src/models/*` for reference. To run the Node version: `yarn install && yarn start` (requires Node 18). The Rust binary is the **primary** backend now.
 
 ## Deploy
 

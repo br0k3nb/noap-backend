@@ -1,6 +1,6 @@
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{Extension, Path, State},
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use bson::{doc, oid::ObjectId};
@@ -8,12 +8,20 @@ use futures::TryStreamExt;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use crate::{models::Session, AppState};
+use crate::{
+    middleware::auth::{request_session_token, require_owner},
+    models::Session,
+    utils::crypto::Claims,
+    AppState,
+};
 
 pub async fn view(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    headers: HeaderMap,
     Path(userId): Path<String>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    require_owner(&claims, &userId)?;
     let uid = ObjectId::parse_str(&userId).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
@@ -25,17 +33,19 @@ pub async fn view(
         .find(doc! {"userId": uid})
         .await
         .map_err(|e| {
+            tracing::error!("DB error listing sessions: {}", e);
             (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"message": "Database error, please try again later"})),
             )
         })?
         .try_collect()
         .await
         .map_err(|e| {
+            tracing::error!("DB cursor error listing sessions: {}", e);
             (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"message": "Database error, please try again later"})),
             )
         })?;
     if sessions.is_empty() {
@@ -44,13 +54,29 @@ pub async fn view(
             Json(json!({"message": "Error, no sessions found"})),
         ));
     }
-    Ok((StatusCode::OK, Json(json!(sessions))))
+    // The frontend can no longer read the JWT (HttpOnly cookie), so the
+    // backend marks which session row belongs to the calling request.
+    // Raw tokens are stripped: with cookie auth the client never needs them,
+    // and shipping them would re-expose session secrets to page JavaScript.
+    let current_token = request_session_token(&headers).map(|(t, _)| t);
+    let mut out = Vec::with_capacity(sessions.len());
+    for s in sessions {
+        let mut v = serde_json::to_value(&s).unwrap_or(json!({}));
+        v["current"] = json!(current_token.as_deref() == Some(s.token.as_str()));
+        if let Some(obj) = v.as_object_mut() {
+            obj.remove("token");
+        }
+        out.push(v);
+    }
+    Ok((StatusCode::OK, Json(json!(out))))
 }
 
 pub async fn delete_one(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path((userId, sessionId)): Path<(String, String)>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    require_owner(&claims, &userId)?;
     if userId.is_empty() || sessionId.is_empty() {
         return Err((
             StatusCode::UNAUTHORIZED,
@@ -75,9 +101,10 @@ pub async fn delete_one(
         .delete_one(doc! {"_id": sid, "userId": uid})
         .await
         .map_err(|e| {
+            tracing::error!("DB error deleting session: {}", e);
             (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"message": "Database error, please try again later"})),
             )
         })?;
     Ok((
@@ -88,8 +115,10 @@ pub async fn delete_one(
 
 pub async fn delete_all(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(userId): Path<String>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    require_owner(&claims, &userId)?;
     if userId.is_empty() {
         return Err((
             StatusCode::UNAUTHORIZED,
@@ -108,9 +137,10 @@ pub async fn delete_all(
         .delete_many(doc! {"userId": uid})
         .await
         .map_err(|e| {
+            tracing::error!("DB error deleting sessions: {}", e);
             (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"message": "Database error, please try again later"})),
             )
         })?;
     Ok((

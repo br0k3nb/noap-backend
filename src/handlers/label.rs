@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{models::Label, AppState};
+use crate::{middleware::auth::require_owner, models::Label, utils::crypto::Claims, AppState};
 
 #[derive(Deserialize)]
 pub struct ViewQuery {
@@ -39,9 +39,11 @@ pub struct EditReq {
 
 pub async fn view(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(userId): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    require_owner(&claims, &userId)?;
     let uid = ObjectId::parse_str(&userId).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
@@ -72,7 +74,7 @@ pub async fn view(
     let total = coll.count_documents(filter.clone()).await.map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            Json(json!({"message": e.to_string()})),
+            crate::utils::db_err_json(e),
         )
     })? as i64;
     let skip = ((page - 1) * limit).max(0) as u64;
@@ -94,13 +96,13 @@ pub async fn view(
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?;
     let docs: Vec<Label> = cursor2.try_collect().await.map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            Json(json!({"message": e.to_string()})),
+            crate::utils::db_err_json(e),
         )
     })?;
     let total_pages = (total + limit - 1) / limit;
@@ -124,9 +126,11 @@ pub async fn view(
 
 pub async fn add(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(userId): Path<String>,
     Json(payload): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    require_owner(&claims, &userId)?;
     let uid = ObjectId::parse_str(&userId).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
@@ -182,6 +186,7 @@ pub async fn add(
 
 pub async fn edit(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(_userId): Path<String>,
     Json(payload): Json<EditReq>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
@@ -191,12 +196,32 @@ pub async fn edit(
             Json(json!({"message": "Invalid id"})),
         )
     })?;
+    // Labels are owned via their userId: fetch first so one user cannot
+    // rename another user's labels by id.
+    let label = state
+        .db
+        .collection::<Label>("labels")
+        .find_one(doc! {"_id": oid})
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error loading label: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"message": "Database error, please try again later"})),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message": "Label not found"})),
+        ))?;
+    require_owner(&claims, &label.userId.to_hex())?;
     state.db.collection::<Label>("labels").update_one(doc!{"_id": oid}, doc!{"$set": {"name": payload.name, "color": payload.color, "type": payload.label_type, "updatedAt": Bson::DateTime(bson::DateTime::now())}}).await.map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"message": "Error, please try again later!"}))))?;
     Ok((StatusCode::OK, Json(json!({"message": "Label updated!"}))))
 }
 
 pub async fn delete(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let oid = ObjectId::parse_str(&id).map_err(|_| {
@@ -205,6 +230,23 @@ pub async fn delete(
             Json(json!({"message": "Invalid id"})),
         )
     })?;
+    let label = state
+        .db
+        .collection::<Label>("labels")
+        .find_one(doc! {"_id": oid})
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error loading label: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"message": "Database error, please try again later"})),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message": "Label not found"})),
+        ))?;
+    require_owner(&claims, &label.userId.to_hex())?;
     state
         .db
         .collection::<Label>("labels")

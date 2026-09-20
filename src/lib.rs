@@ -13,16 +13,17 @@ mod models;
 mod utils;
 
 use axum::{
-    http::Method,
+    http::{header, HeaderValue, Method},
     routing::{delete, get, patch, post},
     Router,
 };
 use mongodb::{Client, Database};
 use std::{env, sync::Arc};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use handlers::{label, note, session, user};
+use utils::ratelimit::RateLimiter;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -34,6 +35,11 @@ pub struct AppState {
     pub mail_pass: String,
     pub mail_from: String,
     pub ipgeo_key: String,
+    /// Exact origins allowed to call this API (scheme + host + port).
+    pub allowed_origins: Vec<String>,
+    pub cookie_secure: bool,
+    pub cookie_samesite: String,
+    pub rate_limiter: Arc<RateLimiter>,
 }
 
 pub fn init_tracing() {
@@ -49,7 +55,9 @@ pub async fn build_app() -> anyhow::Result<Router> {
     dotenvy::dotenv().ok();
 
     let mongodb_url = env::var("MONGODB_URL").expect("MONGODB_URL must be set");
-    let jwt_secret = env::var("SECRET").unwrap_or_else(|_| "secret".to_string());
+    // No insecure default: starting without a real secret would mint
+    // forgeable session tokens for every user.
+    let jwt_secret = env::var("SECRET").expect("SECRET must be set");
     let mail_host = env::var("MAIL_HOSTNAME").unwrap_or_default();
     let mail_port: u16 = env::var("MAIL_PORT")
         .ok()
@@ -59,6 +67,57 @@ pub async fn build_app() -> anyhow::Result<Router> {
     let mail_pass = env::var("MAIL_PASSWORD").unwrap_or_default();
     let mail_from = env::var("HOST_MAIL").unwrap_or_else(|_| mail_user.clone());
     let ipgeo_key = env::var("IPGEOLOCATION_KEY").unwrap_or_default();
+
+    // Explicit CORS allowlist (no wildcards: cookies require exact origins).
+    // Production MUST set ALLOWED_ORIGINS to the deployed frontend origin(s),
+    // e.g. ALLOWED_ORIGINS=https://noap.vercel.app
+    let allowed_origins_from_env = env::var("ALLOWED_ORIGINS").ok();
+    let allowed_origins: Vec<String> = allowed_origins_from_env
+        .clone()
+        .unwrap_or_else(|| {
+            "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000".to_string()
+        })
+        .split(',')
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if allowed_origins_from_env.is_none() {
+        // Fail-loud, not fail-open: localhost-only defaults block every
+        // cross-origin production caller until this is configured.
+        tracing::warn!(
+            "ALLOWED_ORIGINS is not set — using localhost-only defaults {:?}. Production deployments MUST set ALLOWED_ORIGINS to the deployed frontend origin(s).",
+            allowed_origins
+        );
+    } else {
+        tracing::info!("CORS allowed origins: {:?}", allowed_origins);
+    }
+
+    // Cookie transport. Production defaults (Secure + SameSite=None) are
+    // required for cross-site cookie auth over HTTPS. For plain-http local
+    // dev set COOKIE_SECURE=false (SameSite auto-downgrades to Lax).
+    let cookie_secure: bool = env::var("COOKIE_SECURE")
+        .map(|v| !(v == "false" || v == "0" || v.eq_ignore_ascii_case("no")))
+        .unwrap_or(true);
+    let cookie_samesite =
+        env::var("COOKIE_SAMESITE").unwrap_or_else(|_| "None".to_string());
+    {
+        // Log the effective mode so a misconfigured deployment is obvious:
+        // SameSite=None without Secure is rejected by browsers, so the
+        // cookie layer downgrades it to Lax (local http dev).
+        let effective_samesite = if !cookie_secure && cookie_samesite.eq_ignore_ascii_case("none") {
+            "Lax (downgraded: SameSite=None requires Secure)"
+        } else {
+            cookie_samesite.as_str()
+        };
+        tracing::info!(
+            "Session cookies: HttpOnly, Secure={}, SameSite={}",
+            cookie_secure,
+            effective_samesite
+        );
+        if cookie_secure {
+            tracing::info!("Cookie transport assumes HTTPS origins — plain-http local dev needs COOKIE_SECURE=false.");
+        }
+    }
 
     let client = Client::with_uri_str(&mongodb_url).await?;
     let db = client
@@ -75,10 +134,21 @@ pub async fn build_app() -> anyhow::Result<Router> {
         mail_pass,
         mail_from,
         ipgeo_key,
+        allowed_origins: allowed_origins.clone(),
+        cookie_secure,
+        cookie_samesite,
+        rate_limiter: Arc::new(RateLimiter::new()),
     });
 
+    let mut valid_origins = Vec::new();
+    for origin in &allowed_origins {
+        match HeaderValue::from_str(origin) {
+            Ok(v) => valid_origins.push(v),
+            Err(e) => tracing::warn!("Ignoring invalid ALLOWED_ORIGINS entry {:?}: {}", origin, e),
+        }
+    }
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(AllowOrigin::list(valid_origins))
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -86,7 +156,13 @@ pub async fn build_app() -> anyhow::Result<Router> {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers(Any)
+        .allow_headers(AllowHeaders::list(vec![
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+            header::ORIGIN,
+        ]))
+        .allow_credentials(true)
         .allow_private_network(true);
 
     let public_routes = Router::new()
@@ -98,14 +174,19 @@ pub async fn build_app() -> anyhow::Result<Router> {
         .route("/2fa/verify", post(user::verify_2fa_code))
         .route("/find-user", post(user::find_and_send_code))
         .route("/change-pass", patch(user::change_password))
-        .route("/convert/account/email", patch(user::convert_into_normal))
-        .route("/convert/account/google", patch(user::convert_into_google));
+        // Public on purpose: the handler performs full token + session
+        // validation itself (it must also accept legacy body tokens once, to
+        // migrate pre-cookie clients into HttpOnly cookies).
+        .route("/verify-token", post(user::verify_token));
 
     let protected_routes = Router::new()
         .route("/sign-out", post(user::sign_out))
         .route("/verify-user", post(user::verify_user))
         .route("/2fa/qrcode", post(user::generate_2fa_qrcode))
-        .route("/verify-token", post(user::verify_token))
+        // Account conversion is a settings action: only the session owner
+        // may convert their own account.
+        .route("/convert/account/email", patch(user::convert_into_normal))
+        .route("/convert/account/google", patch(user::convert_into_google))
         .route("/lastOpenedNote/{id}", patch(user::last_opened_note))
         .route("/settings/change-theme/{id}", patch(user::change_theme))
         .route("/settings/note-text/{id}", post(user::note_text_expanded))

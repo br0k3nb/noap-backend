@@ -1,19 +1,49 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     Json,
 };
 use bson::{doc, oid::ObjectId, Bson, DateTime as BsonDateTime};
 use chrono::Utc;
 use futures::TryStreamExt;
+use mongodb::Database;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
+    middleware::auth::require_owner,
     models::{Note, NoteState},
+    utils::crypto::Claims,
     AppState,
 };
+
+/// Loads a note and guarantees it belongs to the session owner.
+/// Without this, any authenticated user could read/mutate another user's
+/// notes by guessing their ids.
+async fn owned_note(
+    db: &Database,
+    note_id: ObjectId,
+    claims: &Claims,
+) -> Result<Note, (StatusCode, Json<Value>)> {
+    let note = db
+        .collection::<Note>("notes")
+        .find_one(doc! {"_id": note_id})
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error loading note: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"message": "Database error, please try again later"})),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({"message": "Note wasn't found!"})),
+        ))?;
+    require_owner(claims, &note.author)?;
+    Ok(note)
+}
 
 #[derive(Deserialize)]
 pub struct AddReq {
@@ -64,9 +94,11 @@ pub struct BgReq {
 
 pub async fn view(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path((page, author)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    require_owner(&claims, &author)?;
     if author.is_empty() || page.is_empty() {
         return Err((
             StatusCode::NOT_FOUND,
@@ -97,7 +129,7 @@ pub async fn view(
         let total = coll.count_documents(filter.clone()).await.map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })? as i64;
         let skip = ((page_num - 1) * limit).max(0) as u64;
@@ -110,13 +142,13 @@ pub async fn view(
             .map_err(|e| {
                 (
                     StatusCode::BAD_REQUEST,
-                    Json(json!({"message": e.to_string()})),
+                    crate::utils::db_err_json(e),
                 )
             })?;
         let docs: Vec<Note> = cursor.try_collect().await.map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?;
         let total_pages = (total + limit - 1) / limit;
@@ -129,7 +161,7 @@ pub async fn view(
             .map_err(|e| {
                 (
                     StatusCode::BAD_REQUEST,
-                    Json(json!({"message": e.to_string()})),
+                    crate::utils::db_err_json(e),
                 )
             })? as i64;
         let skip_p = ((pinned_page - 1) * 10).max(0) as u64;
@@ -142,13 +174,13 @@ pub async fn view(
             .map_err(|e| {
                 (
                     StatusCode::BAD_REQUEST,
-                    Json(json!({"message": e.to_string()})),
+                    crate::utils::db_err_json(e),
                 )
             })?;
         let docs_p: Vec<Note> = cursor_p.try_collect().await.map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?;
         let total_pages_p = (total_pinned + 10 - 1) / 10;
@@ -184,13 +216,13 @@ pub async fn view(
         let mut cursor = coll.find(filter).await.map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?;
         let all: Vec<Note> = cursor.try_collect().await.map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?;
         // For each note, check if name/body matches or any label name matches
@@ -253,10 +285,12 @@ pub async fn view(
 
 pub async fn get_note(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let author = query.get("author").cloned().unwrap_or_default();
+    require_owner(&claims, &author)?;
     let oid = ObjectId::parse_str(&id).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
@@ -267,13 +301,14 @@ pub async fn get_note(
     let note = coll.find_one(doc! {"_id": oid}).await.map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            Json(json!({"message": e.to_string()})),
+            crate::utils::db_err_json(e),
         )
     })?;
     let mut note = note.ok_or((
         StatusCode::BAD_REQUEST,
         Json(json!({"message": "Error fetching note contents"})),
     ))?;
+    require_owner(&claims, &note.author)?;
     if note.author != author {
         return Err((
             StatusCode::UNAUTHORIZED,
@@ -297,7 +332,7 @@ pub async fn get_note(
                 .map_err(|e| {
                     (
                         StatusCode::BAD_REQUEST,
-                        Json(json!({"message": e.to_string()})),
+                        crate::utils::db_err_json(e),
                     )
                 })?;
             if let Some(ns) = state_doc {
@@ -331,8 +366,10 @@ pub async fn get_note(
 
 pub async fn add(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Json(payload): Json<AddReq>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    require_owner(&claims, &payload.author)?;
     let db = &state.db;
     // Clone pageLocation before moving payload
     let page_loc_clone = payload.pageLocation.clone();
@@ -402,7 +439,7 @@ pub async fn add(
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?;
     // pageLocation logic: retrieve from clone
@@ -418,6 +455,7 @@ pub async fn add(
 
 pub async fn add_label(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Json(payload): Json<AddLabelReq>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let oid = ObjectId::parse_str(&payload.noteId).map_err(|_| {
@@ -426,6 +464,7 @@ pub async fn add_label(
             Json(json!({"message": "Error, please try again later!"})),
         )
     })?;
+    owned_note(&state.db, oid, &claims).await?;
     let label_oids: Vec<ObjectId> = payload
         .labels
         .iter()
@@ -447,6 +486,7 @@ pub async fn add_label(
 
 pub async fn edit(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Json(payload): Json<EditReq>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let oid = ObjectId::parse_str(&payload._id).map_err(|_| {
@@ -455,6 +495,7 @@ pub async fn edit(
             Json(json!({"message": "Error, please try again later!"})),
         )
     })?;
+    owned_note(&state.db, oid, &claims).await?;
     let mut update = doc! {};
     if let Some(t) = payload.title {
         update.insert("name", t);
@@ -498,6 +539,7 @@ pub async fn edit(
 
 pub async fn delete(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let oid = ObjectId::parse_str(&id).map_err(|_| {
@@ -510,10 +552,11 @@ pub async fn delete(
     let note = coll.find_one(doc! {"_id": oid}).await.map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            Json(json!({"message": e.to_string()})),
+            crate::utils::db_err_json(e),
         )
     })?;
     if let Some(n) = note {
+        require_owner(&claims, &n.author)?;
         if let Some(state_bson) = n.state {
             if let Bson::ObjectId(sid) = state_bson {
                 state
@@ -524,7 +567,7 @@ pub async fn delete(
                     .map_err(|e| {
                         (
                             StatusCode::BAD_REQUEST,
-                            Json(json!({"message": e.to_string()})),
+                            crate::utils::db_err_json(e),
                         )
                     })?;
             }
@@ -532,7 +575,7 @@ pub async fn delete(
         coll.delete_one(doc! {"_id": oid}).await.map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?;
     }
@@ -541,6 +584,7 @@ pub async fn delete(
 
 pub async fn delete_label(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path((id, noteId)): Path<(String, String)>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let nid = ObjectId::parse_str(&noteId).map_err(|_| {
@@ -556,13 +600,14 @@ pub async fn delete_label(
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?
         .ok_or((
             StatusCode::BAD_REQUEST,
             Json(json!({"message": "Note wasn't found!"})),
         ))?;
+    require_owner(&claims, &note.author)?;
     let labels = note.labels.unwrap_or_default();
     let filtered: Vec<ObjectId> = labels
         .into_iter()
@@ -573,7 +618,7 @@ pub async fn delete_label(
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?;
     Ok((StatusCode::OK, Json(json!({"message": "Label detached!"}))))
@@ -581,6 +626,7 @@ pub async fn delete_label(
 
 pub async fn delete_all_labels(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(noteId): Path<String>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let nid = ObjectId::parse_str(&noteId).map_err(|_| {
@@ -589,6 +635,7 @@ pub async fn delete_all_labels(
             Json(json!({"message": "Error, please try again later!"})),
         )
     })?;
+    owned_note(&state.db, nid, &claims).await?;
     state
         .db
         .collection::<Note>("notes")
@@ -600,7 +647,7 @@ pub async fn delete_all_labels(
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?;
     Ok((StatusCode::OK, Json(json!({"message": "Labels detached!"}))))
@@ -608,6 +655,7 @@ pub async fn delete_all_labels(
 
 pub async fn pin_note(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(noteId): Path<String>,
     Json(payload): Json<PinReq>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
@@ -625,13 +673,14 @@ pub async fn pin_note(
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?
         .ok_or((
             StatusCode::BAD_REQUEST,
             Json(json!({"message": "Note not found"})),
         ))?;
+    require_owner(&claims, &note.author)?;
     let mut settings = note.settings.unwrap_or_default();
     settings.pinned = Some(payload.condition);
     coll.update_one(
@@ -642,7 +691,7 @@ pub async fn pin_note(
     .map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            Json(json!({"message": e.to_string()})),
+            crate::utils::db_err_json(e),
         )
     })?;
     let msg = if payload.condition {
@@ -655,6 +704,7 @@ pub async fn pin_note(
 
 pub async fn rename(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
     Json(payload): Json<RenameReq>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
@@ -664,6 +714,7 @@ pub async fn rename(
             Json(json!({"message": "Error, please try again later!"})),
         )
     })?;
+    owned_note(&state.db, oid, &claims).await?;
     state
         .db
         .collection::<Note>("notes")
@@ -672,7 +723,7 @@ pub async fn rename(
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?;
     Ok((StatusCode::OK, Json(json!({"message": "Updated!"}))))
@@ -680,6 +731,7 @@ pub async fn rename(
 
 pub async fn change_bg(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(noteId): Path<String>,
     Json(payload): Json<BgReq>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
@@ -696,13 +748,14 @@ pub async fn change_bg(
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?
         .ok_or((
             StatusCode::BAD_REQUEST,
             Json(json!({"message": "Note not found"})),
         ))?;
+    require_owner(&claims, &note.author)?;
     let mut settings = note.settings.unwrap_or_default();
     settings.noteBackgroundColor = Some(payload.noteBackgroundColor);
     coll.update_one(
@@ -713,7 +766,7 @@ pub async fn change_bg(
     .map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            Json(json!({"message": e.to_string()})),
+            crate::utils::db_err_json(e),
         )
     })?;
     Ok((StatusCode::OK, Json(json!({"message": "Updated!"}))))
@@ -721,6 +774,7 @@ pub async fn change_bg(
 
 pub async fn change_image(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Path(noteId): Path<String>,
     Json(payload): Json<ImageReq>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
@@ -730,6 +784,7 @@ pub async fn change_image(
             Json(json!({"message": "Invalid id"})),
         )
     })?;
+    owned_note(&state.db, nid, &claims).await?;
     state
         .db
         .collection::<Note>("notes")
@@ -738,7 +793,7 @@ pub async fn change_image(
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"message": e.to_string()})),
+                crate::utils::db_err_json(e),
             )
         })?;
     Ok((StatusCode::OK, Json(json!({"message": "Updated!"}))))
