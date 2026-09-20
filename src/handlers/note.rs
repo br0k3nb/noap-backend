@@ -124,8 +124,10 @@ pub async fn view(
     // Simplified pagination: find notes without aggregation, then manually handle
     // For search empty case, we need pinned and non-pinned separately
     if search.is_empty() {
-        // Non-pinned
-        let filter = doc! {"author": &author, "settings.pinned": false};
+        // Non-pinned. NOTE: `$ne: true` (not `false`) is deliberate — old
+        // notes created before pinning existed have no `settings.pinned`
+        // field at all, and MongoDB equality does not match missing fields.
+        let filter = doc! {"author": &author, "settings.pinned": {"$ne": true}};
         let total = coll.count_documents(filter.clone()).await.map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,

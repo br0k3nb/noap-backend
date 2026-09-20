@@ -376,6 +376,8 @@ pub struct Note {
     pub labels: Option<Vec<ObjectId>>,
     pub image: Option<String>,
     pub state: Option<bson::Bson>, // Mixed
+    // Old notes may predate the settings object entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<NoteSettings>,
     pub author: String,
     pub pageLocation: Option<String>,
