@@ -17,8 +17,7 @@ use axum::{
     routing::{delete, get, patch, post},
     Router,
 };
-use bson::doc;
-use mongodb::{Client, Database, IndexModel};
+use mongodb::{Client, Database};
 use std::{env, sync::Arc};
 use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -52,43 +51,17 @@ pub fn init_tracing() {
         .try_init();
 }
 
-/// Creates the indexes the hot paths depend on. Best-effort and idempotent:
-/// a failure (e.g. restricted DB privileges, legacy duplicate emails) only
-/// logs a warning — the API keeps working, just slower.
-async fn ensure_indexes(db: &Database) {
-    // (collection, keys, unique)
-    let specs: Vec<(&str, bson::Document, bool)> = vec![
-        // Notes list: filter (author, settings.pinned) + sort (createdAt).
-        ("notes", doc! {"author": 1, "settings.pinned": 1, "createdAt": 1}, false),
-        ("labels", doc! {"userId": 1}, false),
-        ("sessions", doc! {"userId": 1}, false),
-        // Direct token lookups (middleware, dual-use endpoints, migration).
-        ("sessions", doc! {"token": 1}, false),
-        ("users", doc! {"email": 1}, true),
-        ("otps", doc! {"userId": 1}, false),
-        ("2fa", doc! {"userId": 1}, false),
-        ("noteStates", doc! {"noteId": 1}, false),
-    ];
-    for (coll_name, keys, unique) in specs {
-        let coll = db.collection::<bson::Document>(coll_name);
-        let mut model = IndexModel::builder().keys(keys).build();
-        if unique {
-            model.options = Some(
-                mongodb::options::IndexOptions::builder()
-                    .unique(true)
-                    .build(),
-            );
-        }
-        match coll.create_index(model).await {
-            Ok(_) => tracing::debug!("Ensured index on {}", coll_name),
-            Err(e) => tracing::warn!(
-                "Could not ensure index on {} (continuing without it): {}",
-                coll_name,
-                e
-            ),
-        }
-    }
-}
+// NOTE on indexes: creating them at boot was tried and reverted — on this
+// platform boots are frequent (fresh runtime per burst of invocations, as the
+// logs show), so 8 sequential index round trips taxed every cold path while
+// buying nothing measurable on collections this small (scans are single-digit
+// ms). If collections ever grow large, create these once out of band
+// (mongosh/Compass) instead of at startup:
+//   notes:    { author: 1, "settings.pinned": 1, createdAt: 1 }
+//   labels:   { userId: 1 }
+//   sessions: { userId: 1 }, { token: 1 }
+//   users:     { email: 1 } (unique)
+//   otps:      { userId: 1 }, 2fa: { userId: 1 }, noteStates: { noteId: 1 }
 
 pub async fn build_app() -> anyhow::Result<Router> {
     dotenvy::dotenv().ok();
@@ -163,7 +136,6 @@ pub async fn build_app() -> anyhow::Result<Router> {
         .default_database()
         .unwrap_or_else(|| client.database("noap"));
     tracing::info!("MongoDB client initialized");
-    ensure_indexes(&db).await;
 
     let state = Arc::new(AppState {
         db,
