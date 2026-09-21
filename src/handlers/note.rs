@@ -45,6 +45,51 @@ async fn owned_note(
     Ok(note)
 }
 
+/// One paginated slice of the notes list: total count + page docs.
+/// The count and the fetch run concurrently, and the heavy `state` blob is
+/// excluded via projection — list cards never use it (full state loads on
+/// note open), and legacy rows may embed large state strings.
+async fn fetch_note_page(
+    db: &Database,
+    filter: bson::Document,
+    skip: u64,
+    limit: i64,
+) -> Result<(Vec<Note>, i64), (StatusCode, Json<Value>)> {
+    let coll = db.collection::<Note>("notes");
+    let (total, docs) = tokio::join!(
+        async {
+            coll.count_documents(filter.clone()).await.map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    crate::utils::db_err_json(e),
+                )
+            })
+        },
+        async {
+            match coll
+                .find(filter.clone())
+                .skip(skip)
+                .limit(limit)
+                .sort(doc! {"createdAt": 1})
+                .projection(doc! {"state": 0})
+                .await
+            {
+                Ok(mut cursor) => cursor.try_collect::<Vec<Note>>().await.map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        crate::utils::db_err_json(e),
+                    )
+                }),
+                Err(e) => Err((
+                    StatusCode::BAD_REQUEST,
+                    crate::utils::db_err_json(e),
+                )),
+            }
+        },
+    );
+    Ok((docs?, total? as i64))
+}
+
 #[derive(Deserialize)]
 pub struct AddReq {
     pub name: Option<String>,
@@ -128,63 +173,20 @@ pub async fn view(
         // notes created before pinning existed have no `settings.pinned`
         // field at all, and MongoDB equality does not match missing fields.
         let filter = doc! {"author": &author, "settings.pinned": {"$ne": true}};
-        let total = coll.count_documents(filter.clone()).await.map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                crate::utils::db_err_json(e),
-            )
-        })? as i64;
         let skip = ((page_num - 1) * limit).max(0) as u64;
-        let mut cursor = coll
-            .find(filter)
-            .skip(skip as u64)
-            .limit(limit)
-            .sort(doc! {"createdAt": 1})
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    crate::utils::db_err_json(e),
-                )
-            })?;
-        let docs: Vec<Note> = cursor.try_collect().await.map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                crate::utils::db_err_json(e),
-            )
-        })?;
-        let total_pages = (total + limit - 1) / limit;
 
         // Pinned
         let filter_pinned = doc! {"author": &author, "settings.pinned": true};
-        let total_pinned = coll
-            .count_documents(filter_pinned.clone())
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    crate::utils::db_err_json(e),
-                )
-            })? as i64;
         let skip_p = ((pinned_page - 1) * 10).max(0) as u64;
-        let mut cursor_p = coll
-            .find(filter_pinned)
-            .skip(skip_p as u64)
-            .limit(10)
-            .sort(doc! {"createdAt": 1})
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    crate::utils::db_err_json(e),
-                )
-            })?;
-        let docs_p: Vec<Note> = cursor_p.try_collect().await.map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                crate::utils::db_err_json(e),
-            )
-        })?;
+        // The four queries (count + page × pinned/non-pinned) are
+        // independent: run them concurrently instead of sequentially.
+        let (plain, pinned) = tokio::join!(
+            fetch_note_page(&state.db, filter, skip, limit),
+            fetch_note_page(&state.db, filter_pinned, skip_p, 10),
+        );
+        let (docs, total) = plain?;
+        let (docs_p, total_pinned) = pinned?;
+        let total_pages = (total + limit - 1) / limit;
         let total_pages_p = (total_pinned + 10 - 1) / 10;
 
         // Map to expected shape (simplified): include label handling via lookup is skipped for brevity
@@ -317,19 +319,56 @@ pub async fn get_note(
             Json(json!({"message": "You don't have permission to access this note!", "code": 1})),
         ));
     }
-    // Lookup state
-    if let Some(state_bson) = note.state.clone() {
+    // Resolve the state reference (if any) and the labels concurrently.
+    // Labels go out as ONE `$in` query instead of N sequential find_ones,
+    // re-emitted in note.labels order (find doesn't preserve input order).
+    let state_id: Option<ObjectId> = note.state.clone().and_then(|state_bson| {
         // state is Mixed, could be ObjectId
-        let state_id = match state_bson {
+        match state_bson {
             Bson::ObjectId(oid) => Some(oid),
             Bson::String(s) => ObjectId::parse_str(&s).ok(),
             _ => None,
-        };
-        if let Some(sid) = state_id {
-            let state_doc = state
+        }
+    });
+    let label_ids: Vec<ObjectId> = note.labels.clone().unwrap_or_default();
+    let (state_doc, label_docs): (
+        Result<Option<NoteState>, (StatusCode, Json<Value>)>,
+        Result<Vec<Value>, (StatusCode, Json<Value>)>,
+    ) = tokio::join!(
+        async {
+            match state_id {
+                Some(sid) => state
+                    .db
+                    .collection::<NoteState>("noteStates")
+                    .find_one(doc! {"_id": sid})
+                    .await
+                    .map_err(|e| {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            crate::utils::db_err_json(e),
+                        )
+                    }),
+                None => Ok(None),
+            }
+        },
+        async {
+            // Labels only attach when a state document resolves below; skip
+            // the query otherwise.
+            if state_id.is_none() || label_ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            let found: Vec<crate::models::Label> = state
                 .db
-                .collection::<NoteState>("noteStates")
-                .find_one(doc! {"_id": sid})
+                .collection::<crate::models::Label>("labels")
+                .find(doc! {"_id": {"$in": &label_ids}})
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        crate::utils::db_err_json(e),
+                    )
+                })?
+                .try_collect()
                 .await
                 .map_err(|e| {
                     (
@@ -337,30 +376,37 @@ pub async fn get_note(
                         crate::utils::db_err_json(e),
                     )
                 })?;
-            if let Some(ns) = state_doc {
-                // Attach state as document
-                // For simplicity, embed state string
-                // Frontend expects state: { _id, state: string }
-                let state_val = json!({"_id": ns.id.map(|o| o.to_hex()).unwrap_or_default(), "state": ns.state});
-                // We need to return note with populated state
-                // Convert note to Value and inject state
-                let mut note_val = serde_json::to_value(&note).unwrap();
-                note_val["state"] = state_val;
-                // Populate labels
-                if let Some(label_ids) = note.labels.clone() {
-                    let label_coll = state.db.collection::<crate::models::Label>("labels");
-                    let mut labels = Vec::new();
-                    for lid in label_ids {
-                        if let Ok(Some(l)) = label_coll.find_one(doc! {"_id": lid}).await {
-                            labels.push(serde_json::to_value(l).unwrap());
-                        }
-                    }
-                    note_val["labels"] = json!(labels);
-                    return Ok((StatusCode::OK, Json(json!({"note": note_val}))));
-                }
-                return Ok((StatusCode::OK, Json(json!({"note": note_val}))));
-            }
+            // Skip deleted labels, as before.
+            let by_id: HashMap<String, Value> = found
+                .into_iter()
+                .filter_map(|l| {
+                    let id = l.id.map(|o| o.to_hex())?;
+                    let v = serde_json::to_value(l).ok()?;
+                    Some((id, v))
+                })
+                .collect();
+            Ok(label_ids
+                .iter()
+                .filter_map(|lid| by_id.get(&lid.to_hex()).cloned())
+                .collect())
+        },
+    );
+    let state_doc = state_doc?;
+    let label_docs = label_docs?;
+    if let Some(ns) = state_doc {
+        // Attach state as document
+        // Frontend expects state: { _id, state: string }
+        let state_val = json!({"_id": ns.id.map(|o| o.to_hex()).unwrap_or_default(), "state": ns.state});
+        // We need to return note with populated state
+        // Convert note to Value and inject state
+        let mut note_val = serde_json::to_value(&note).unwrap();
+        note_val["state"] = state_val;
+        // Populate labels
+        if note.labels.is_some() {
+            note_val["labels"] = json!(label_docs);
+            return Ok((StatusCode::OK, Json(json!({"note": note_val}))));
         }
+        return Ok((StatusCode::OK, Json(json!({"note": note_val}))));
     }
     let note_val = serde_json::to_value(&note).unwrap();
     Ok((StatusCode::OK, Json(json!({"note": note_val}))))

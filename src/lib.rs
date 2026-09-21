@@ -17,7 +17,8 @@ use axum::{
     routing::{delete, get, patch, post},
     Router,
 };
-use mongodb::{Client, Database};
+use bson::doc;
+use mongodb::{Client, Database, IndexModel};
 use std::{env, sync::Arc};
 use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -49,6 +50,44 @@ pub fn init_tracing() {
         ))
         .with(tracing_subscriber::fmt::layer())
         .try_init();
+}
+
+/// Creates the indexes the hot paths depend on. Best-effort and idempotent:
+/// a failure (e.g. restricted DB privileges, legacy duplicate emails) only
+/// logs a warning — the API keeps working, just slower.
+async fn ensure_indexes(db: &Database) {
+    // (collection, keys, unique)
+    let specs: Vec<(&str, bson::Document, bool)> = vec![
+        // Notes list: filter (author, settings.pinned) + sort (createdAt).
+        ("notes", doc! {"author": 1, "settings.pinned": 1, "createdAt": 1}, false),
+        ("labels", doc! {"userId": 1}, false),
+        ("sessions", doc! {"userId": 1}, false),
+        // Direct token lookups (middleware, dual-use endpoints, migration).
+        ("sessions", doc! {"token": 1}, false),
+        ("users", doc! {"email": 1}, true),
+        ("otps", doc! {"userId": 1}, false),
+        ("2fa", doc! {"userId": 1}, false),
+        ("noteStates", doc! {"noteId": 1}, false),
+    ];
+    for (coll_name, keys, unique) in specs {
+        let coll = db.collection::<bson::Document>(coll_name);
+        let mut model = IndexModel::builder().keys(keys).build();
+        if unique {
+            model.options = Some(
+                mongodb::options::IndexOptions::builder()
+                    .unique(true)
+                    .build(),
+            );
+        }
+        match coll.create_index(model).await {
+            Ok(_) => tracing::debug!("Ensured index on {}", coll_name),
+            Err(e) => tracing::warn!(
+                "Could not ensure index on {} (continuing without it): {}",
+                coll_name,
+                e
+            ),
+        }
+    }
 }
 
 pub async fn build_app() -> anyhow::Result<Router> {
@@ -124,6 +163,7 @@ pub async fn build_app() -> anyhow::Result<Router> {
         .default_database()
         .unwrap_or_else(|| client.database("noap"));
     tracing::info!("MongoDB client initialized");
+    ensure_indexes(&db).await;
 
     let state = Arc::new(AppState {
         db,

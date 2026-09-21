@@ -71,12 +71,6 @@ pub async fn view(
         doc! {"userId": uid, "name": {"$regex": regex}}
     };
     let coll = state.db.collection::<Label>("labels");
-    let total = coll.count_documents(filter.clone()).await.map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            crate::utils::db_err_json(e),
-        )
-    })? as i64;
     let skip = ((page - 1) * limit).max(0) as u64;
     let filter2 = if search.is_empty() {
         doc! {"userId": uid}
@@ -87,24 +81,47 @@ pub async fn view(
         };
         doc! {"userId": uid, "name": {"$regex": regex2}}
     };
-    let mut cursor2 = coll
-        .find(filter2)
-        .skip(skip as u64)
-        .limit(limit)
-        .sort(doc! {"_id": 1})
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                crate::utils::db_err_json(e),
-            )
-        })?;
-    let docs: Vec<Label> = cursor2.try_collect().await.map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            crate::utils::db_err_json(e),
-        )
-    })?;
+    // Count and page fetch are independent: run them concurrently.
+    let (total_res, docs_res) = tokio::join!(
+        async {
+            coll.count_documents(filter.clone())
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error counting labels: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"message": "Database error, please try again later"})),
+                    )
+                })
+                .map(|n| n as i64)
+        },
+        async {
+            match coll
+                .find(filter2)
+                .skip(skip)
+                .limit(limit)
+                .sort(doc! {"_id": 1})
+                .await
+            {
+                Ok(mut cursor2) => cursor2.try_collect::<Vec<Label>>().await.map_err(|e| {
+                    tracing::error!("DB cursor error listing labels: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"message": "Database error, please try again later"})),
+                    )
+                }),
+                Err(e) => Err({
+                    tracing::error!("DB error listing labels: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"message": "Database error, please try again later"})),
+                    )
+                }),
+            }
+        },
+    );
+    let total = total_res?;
+    let docs: Vec<Label> = docs_res?;
     let total_pages = (total + limit - 1) / limit;
     let has_next = page < total_pages;
     let has_prev = page > 1;
