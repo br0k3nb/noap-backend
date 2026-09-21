@@ -22,7 +22,7 @@ use std::{env, sync::Arc};
 use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use handlers::{label, note, session, user};
+use handlers::{label, note, passkey, session, user};
 use utils::ratelimit::RateLimiter;
 
 #[derive(Clone)]
@@ -40,6 +40,10 @@ pub struct AppState {
     pub cookie_secure: bool,
     pub cookie_samesite: String,
     pub rate_limiter: Arc<RateLimiter>,
+    /// WebAuthn relying-party identity (passkeys are bound to these).
+    pub webauthn_rp_id: String,
+    pub webauthn_rp_origin: String,
+    pub webauthn_rp_name: String,
 }
 
 pub fn init_tracing() {
@@ -112,7 +116,19 @@ pub async fn build_app() -> anyhow::Result<Router> {
         .unwrap_or(true);
     let cookie_samesite =
         env::var("COOKIE_SAMESITE").unwrap_or_else(|_| "None".to_string());
-    {
+    // WebAuthn relying-party identity. Passkeys are cryptographically bound
+    // to the RP ID, so these MUST match the frontend origin:
+    // localhost values for dev, the deployed frontend host for production
+    // (registrations do not transfer between the two — by design).
+    let webauthn_rp_id = env::var("WEBAUTHN_RP_ID").unwrap_or_else(|_| "localhost".to_string());
+    let webauthn_rp_origin =
+        env::var("WEBAUTHN_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".to_string());
+    let webauthn_rp_name = env::var("WEBAUTHN_RP_NAME").unwrap_or_else(|_| "Noap".to_string());
+    tracing::info!(
+        "WebAuthn RP: id={} origin={}",
+        webauthn_rp_id,
+        webauthn_rp_origin
+    );    {
         // Log the effective mode so a misconfigured deployment is obvious:
         // SameSite=None without Secure is rejected by browsers, so the
         // cookie layer downgrades it to Lax (local http dev).
@@ -136,6 +152,7 @@ pub async fn build_app() -> anyhow::Result<Router> {
         .default_database()
         .unwrap_or_else(|| client.database("noap"));
     tracing::info!("MongoDB client initialized");
+    passkey::ensure_indexes(&db).await?;
 
     let state = Arc::new(AppState {
         db,
@@ -150,6 +167,9 @@ pub async fn build_app() -> anyhow::Result<Router> {
         cookie_secure,
         cookie_samesite,
         rate_limiter: Arc::new(RateLimiter::new()),
+        webauthn_rp_id,
+        webauthn_rp_origin,
+        webauthn_rp_name,
     });
 
     let mut valid_origins = Vec::new();
@@ -186,6 +206,8 @@ pub async fn build_app() -> anyhow::Result<Router> {
         .route("/2fa/verify", post(user::verify_2fa_code))
         .route("/find-user", post(user::find_and_send_code))
         .route("/change-pass", patch(user::change_password))
+        .route("/passkeys/auth/start", post(passkey::auth_start))
+        .route("/passkeys/auth/finish", post(passkey::auth_finish))
         // Public on purpose: the handler performs full token + session
         // validation itself (it must also accept legacy body tokens once, to
         // migrate pre-cookie clients into HttpOnly cookies).
@@ -195,6 +217,10 @@ pub async fn build_app() -> anyhow::Result<Router> {
         .route("/sign-out", post(user::sign_out))
         .route("/verify-user", post(user::verify_user))
         .route("/2fa/qrcode", post(user::generate_2fa_qrcode))
+        .route("/passkeys/register/start", post(passkey::register_start))
+        .route("/passkeys/register/finish", post(passkey::register_finish))
+        .route("/passkeys", get(passkey::list))
+        .route("/passkeys/{credId}", delete(passkey::remove))
         // Account conversion is a settings action: only the session owner
         // may convert their own account.
         .route("/convert/account/email", patch(user::convert_into_normal))

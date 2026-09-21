@@ -538,6 +538,36 @@ pub struct TfaOptions {
     pub useToResetPass: Option<bool>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PasskeyCredential {
+    #[serde(
+        rename = "_id",
+        skip_serializing_if = "Option::is_none",
+        with = "object_id_hex::option"
+    )]
+    pub id: Option<ObjectId>,
+    #[serde(with = "object_id_hex")]
+    pub userId: ObjectId,
+    /// base64url credential ID (global lookup key).
+    pub cred_id: String,
+    /// Serialized webauthn_rs::Passkey (JSON string: immune to BSON quirks
+    /// in third-party key material, trivially re-parsed on use).
+    pub passkey_json: String,
+    pub label: Option<String>,
+    #[serde(
+        with = "bson_rfc3339_option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub createdAt: Option<DateTime<Utc>>,
+    #[serde(
+        with = "bson_rfc3339_option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub lastUsedAt: Option<DateTime<Utc>>,
+}
+
 // Helper for pagination response
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PaginateResponse<T> {

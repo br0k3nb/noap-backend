@@ -51,7 +51,9 @@ npm install && npm run dev   # expects VITE_API_URL=http://0.0.0.0:3002 or defau
 | `ALLOWED_ORIGINS` | **yes in prod** | localhost dev origins | Exact frontend origin(s), comma-separated, e.g. `https://noap.vercel.app` |
 | `COOKIE_SECURE` | no | `true` | Set `false` for plain-http local dev (SameSite auto-downgrades to Lax) |
 | `COOKIE_SAMESITE` | no | `None` | `None` (cross-site, requires Secure) or `Lax` |
-| `MAIL_HOSTNAME` | no | — | SMTP host (OTP mails skipped if empty) |
+| `WEBAUTHN_RP_ID` | no | `localhost` | Passkey relying-party ID — must be the frontend host (`noap.vercel.app` in prod) |
+| `WEBAUTHN_ORIGIN` | no | `http://localhost:5173` | Passkey origin — must be the frontend origin (`https://noap.vercel.app` in prod) |
+| `WEBAUTHN_RP_NAME` | no | `Noap` | Human-readable relying-party name shown by authenticators || `MAIL_HOSTNAME` | no | — | SMTP host (OTP mails skipped if empty) |
 | `MAIL_PORT` | no | 587 | SMTP port |
 | `MAIL_USERNAME` | no | — | SMTP user |
 | `MAIL_PASSWORD` | no | — | SMTP pass |
@@ -81,6 +83,12 @@ POST   /verify-token          (public, self-validating: cookie/Bearer, one-time 
 PATCH  /lastOpenedNote/:id    (auth)
 PATCH  /convert/account/email (auth)
 PATCH  /convert/account/google (auth)
+POST   /passkeys/auth/start
+POST   /passkeys/auth/finish
+POST   /passkeys/register/start     (auth)
+POST   /passkeys/register/finish    (auth)
+GET    /passkeys                    (auth)
+DELETE /passkeys/:credId            (auth)
 PATCH  /settings/change-theme/:id                (auth)
 POST   /settings/note-text/:id                   (auth)
 POST   /settings/pin-notes-folder/:id            (auth)
@@ -149,6 +157,35 @@ noap-backend/
 - Memory safety + fearless concurrency (Tokio)
 - 10–20× lower memory, faster cold starts than Node
 - Single static binary (`cargo build --release`) — no `node_modules`, no `tsc`
+
+## Passkeys (WebAuthn)
+
+Passwordless sign-in via `webauthn-rs` + `@simplewebauthn/browser`. Passwords
+stay valid alongside passkeys (a passkey is never a sole credential).
+
+- All backend verification, storage, and session handling runs in Rust. The flow uses
+  the [webauthn-rs discoverable APIs](https://docs.rs/webauthn-rs/latest/webauthn_rs/struct.Webauthn.html#method.start_discoverable_authentication)
+  and follows its requirement to keep ceremony state server-side.
+- Ceremony state is stored in MongoDB with a random 256-bit opaque `stateToken`.
+  Finish atomically consumes it, checks purpose/account and a strict 10-minute expiry,
+  and rejects replays across instances. TTL cleanup removes abandoned ceremonies.
+- Registration: settings → Passkeys (session required and rate limited). New
+  credentials request resident storage for discoverable, usernameless sign-in.
+- Sign-in uses discoverable authentication, verifies the user handle and current
+  stored credential, and requires user verification (PIN/biometric). This satisfies
+  the second-factor requirement, so successful passkey sign-in skips TOTP.
+- API `options` contains the inner WebAuthn public-key options expected by
+  `@simplewebauthn/browser`. `stateToken` is opaque, not a JWT. Email scoping is
+  no longer supported; authentication starts disclose no account-specific options.
+- Env: `WEBAUTHN_RP_ID` / `WEBAUTHN_ORIGIN` must match the frontend host
+  (localhost values for dev; production HTTPS origin otherwise).
+- Startup ensures the unique `passkey_credentials { cred_id: 1 }` index and
+  TTL `passkey_ceremonies { expires_at: 1 }` index. Database credentials must allow
+  index creation. Existing duplicate credential IDs must be resolved before startup.
+  An optional `{ userId: 1 }` index speeds up credential listing.
+- Deploy frontend and backend together. Existing JWT ceremony tokens are rejected;
+  users can restart an in-progress ceremony. Previously created non-discoverable
+  credentials need re-registration; password/Google sign-in remains available.
 
 ## Deploy
 

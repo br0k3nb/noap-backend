@@ -107,15 +107,16 @@ async fn verify_google_token(
 }
 
 // ---------- Session-cookie plumbing ----------
+// Shared with handlers::passkey (session minting after WebAuthn ceremonies).
 
-fn cookie_config(state: &AppState) -> CookieConfig {
+pub(crate) fn cookie_config(state: &AppState) -> CookieConfig {
     CookieConfig {
         secure: state.cookie_secure,
         same_site: state.cookie_samesite.clone(),
     }
 }
 
-fn set_cookie_headers(pairs: &[String]) -> HeaderMap {
+pub(crate) fn set_cookie_headers(pairs: &[String]) -> HeaderMap {
     let mut headers = HeaderMap::new();
     for pair in pairs {
         if let Ok(v) = HeaderValue::from_str(pair) {
@@ -127,7 +128,7 @@ fn set_cookie_headers(pairs: &[String]) -> HeaderMap {
 
 /// Sliding-window guard for brute-forceable public endpoints. Returns 429
 /// with a generic message (no timing oracle beyond the status itself).
-async fn enforce_rate_limit_key(
+pub(crate) async fn enforce_rate_limit_key(
     state: &AppState,
     key: String,
     max_attempts: u32,
@@ -149,7 +150,7 @@ async fn enforce_rate_limit_key(
     }
 }
 
-async fn enforce_rate_limit(
+pub(crate) async fn enforce_rate_limit(
     state: &AppState,
     headers: &HeaderMap,
     scope: &str,
@@ -169,7 +170,7 @@ async fn enforce_rate_limit(
 /// is caller-supplied — that is the point: it caps attempts against one
 /// target account even when the attacker rotates IPs. Sanitized so crafted
 /// identifiers can't blow up the limiter map.
-fn account_rate_key(scope: &str, id: &str) -> String {
+pub(crate) fn account_rate_key(scope: &str, id: &str) -> String {
     let clean: String = id
         .trim()
         .to_lowercase()
@@ -182,14 +183,14 @@ fn account_rate_key(scope: &str, id: &str) -> String {
     format!("{scope}:{}", if clean.is_empty() { "unknown" } else { &clean })
 }
 
-struct SessionMeta {
-    ua: String,
-    identifier: String,
+pub(crate) struct SessionMeta {
+    pub(crate) ua: String,
+    pub(crate) identifier: String,
 }
 
 /// Creates the session DB row and returns the raw JWT. Callers place it in
 /// the HttpOnly session cookie — it must never appear in a JSON body.
-async fn mint_session(
+pub(crate) async fn mint_session(
     db: &Database,
     uid: ObjectId,
     sub: JwtSub,
