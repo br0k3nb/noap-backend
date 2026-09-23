@@ -59,6 +59,9 @@ npm install && npm run dev   # expects VITE_API_URL=http://0.0.0.0:3002 or defau
 | `MAIL_PASSWORD` | no | — | SMTP pass |
 | `HOST_MAIL` | no | `$MAIL_USERNAME` | From address |
 | `IPGEOLOCATION_KEY` | no | — | api.ipgeolocation.io key (geo fallback to Unknown) |
+| `VAPID_PRIVATE_KEY` | no | — | Base64url-no-pad VAPID private key; enables server-side Web Push (devices subscribe via `POST /push/subscribe/:userId`, cron fans out). Unset = push endpoints 503, in-tab reminders still work |
+| `VAPID_SUBJECT` | no | `mailto:noreply@noap.example.com` | Contact attached to VAPID signatures (required by RFC8292) |
+| `CRON_SECRET` | **yes in prod** | — | Bearer secret authorizing `POST /cron/push-due` (Vercel sends it automatically when set). Unset = route open (local dev only) |
 | `PORT` | no | 3002 | Listen port |
 | `RUST_LOG` | no | info | Tracing level |
 
@@ -127,6 +130,54 @@ POST   /label/add/:userId                        (auth)
 PATCH  /label/edit/:userId                       (auth)
 DELETE /label/delete/:id                         (auth)
 ```
+
+**Activities** (schedules that trigger frontend browser notifications — trigger types: `daily` at `HH:MM`, `once` at `DD/MM/YYYY` + `HH:MM`; all times use the America/Recife timezone. An activity can link a note as its recurring todo list via `noteId`; `POST /activity/complete/:id` records the `doneDates` history that drives the streak, and the frontend resets the note's checkboxes on completion + on each new occurrence tracked in `seenOccurrences`)
+```
+GET    /activities/:userId                       (auth)
+POST   /activity/add/:userId                     (auth, accepts optional noteId)
+PATCH  /activity/edit/:userId                    (auth, accepts optional noteId to link/unlink)
+POST   /activity/toggle/:id                      (auth)
+POST   /activity/triggered/:id                   (auth)
+POST   /activity/link-note/:id                   (auth, { noteId })
+POST   /activity/unlink-note/:id                 (auth)
+POST   /activity/complete/:id                    (auth, { date?: "DD/MM/YYYY" } -> streak)
+POST   /activity/seen/:id                        (auth, { occurrenceKey } rollover bookkeeping)
+GET    /activity/progress/:id                    (auth, doneDates + currentStreak + doneToday)
+DELETE /activity/delete/:id                      (auth)
+```
+
+**Server-side push** (Web Push, RFC8030 — rings every subscribed device, phone or PC, even with no Noap tab open; `POST /cron/push-due` every minute fans out due activities, deduped per occurrence via `activities.lastPushKey`)
+```
+GET    /push/vapid-key                           (public, 503 while VAPID_PRIVATE_KEY is unset)
+POST   /push/subscribe/:userId                   (auth, { endpoint, p256dh, auth, userAgent? })
+POST   /push/unsubscribe/:userId                 (auth, { endpoint })
+GET    /push/subscriptions/:userId               (auth, "your devices" list)
+GET/POST /cron/push-due                          (CRON_SECRET bearer, NOT session auth)
+```
+
+### Web Push setup (one-time, ~5 min)
+
+Server-side push needs a VAPID keypair (identifies your server to push
+services) plus a per-minute cron tick:
+
+```bash
+# Generate a keypair (any one of):
+npx web-push generate-vapid-keys
+```
+
+Then set env vars (local `.env` + Vercel dashboard): `VAPID_PRIVATE_KEY` to the
+base64url-no-pad private key, `VAPID_SUBJECT=mailto:you@example.com` (contact,
+required by RFC8292), `CRON_SECRET` to a long random string (authorizes
+`/cron/push-due`; Vercel sends it as `Authorization: Bearer <CRON_SECRET>`
+automatically when set). The backend derives + serves the public key at
+`GET /push/vapid-key` — no need to store it anywhere. Add the cron job to the
+backend `vercel.json` (`{ "crons": [{ "path": "/cron/push-due",
+"schedule": "* * * * *" }] }` — Vercel plan limits apply: Hobby allows daily
+crons, so use an external per-minute pinger e.g. cron-job.org hitting
+`POST /cron/push-due` with the bearer header, while Pro allows every-minute
+crons). Each device opts in once: Activities → Enable under "Ring this device
+even with Noap closed". Desktop Chrome needs the site allowed; iOS needs Noap
+added to Home Screen + push allowed (iOS 16.4+).
 
 Auth = HttpOnly session cookie (`noap_session`) or `Authorization: Bearer <JWT>` + session existence + `exp`/`expAt` checks (see `src/middleware/auth.rs`). Cookie-authed state-changing requests additionally require an allowlisted `Origin`/`Referer` (CSRF guard). Brute-forceable public endpoints (`/sign-in`, `/sign-in/google`, `/find-user`, `/verify-otp`, `/2fa/verify`) are per-IP rate-limited.
 

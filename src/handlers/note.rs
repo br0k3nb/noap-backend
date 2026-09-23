@@ -626,6 +626,20 @@ pub async fn delete(
                 crate::utils::db_err_json(e),
             )
         })?;
+        // A deleted note must not leave dangling `noteId` links behind:
+        // activities that pointed at it become plain (non-todo) activities,
+        // keeping their `doneDates` streak history for a future re-link.
+        if let Err(e) = state
+            .db
+            .collection::<crate::models::Activity>("activities")
+            .update_many(
+                doc! {"noteId": oid.to_hex()},
+                doc! {"$unset": {"noteId": ""}},
+            )
+            .await
+        {
+            tracing::warn!("Failed unlinking deleted note {} from activities: {}", oid.to_hex(), e);
+        }
     }
     Ok((StatusCode::OK, Json(json!({"message": "Note deleted!"}))))
 }

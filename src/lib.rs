@@ -22,12 +22,26 @@ use std::{env, sync::Arc};
 use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use handlers::{label, note, passkey, session, user};
+use handlers::{activity, label, note, passkey, push, session, user};
 use utils::ratelimit::RateLimiter;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Database,
+    pub http: reqwest::Client,
+    /// Raw base64url (no pad) VAPID private key for Web Push signing. `None`
+    /// means server-side push is disabled (subscription endpoints 503).
+    pub vapid_private_key: Option<String>,
+    /// `mailto:` contact attached to VAPID signatures (required by RFC8292).
+    pub vapid_subject: String,
+    /// Base64url (no pad) VAPID public key handed to browsers at subscribe
+    /// time. Derived from the private key at boot so the pair can never
+    /// mismatch; `None` while push is disabled.
+    pub vapid_public_key: Option<String>,
+    /// Shared secret authorizing the `/cron/push-due` route (Vercel sends it
+    /// as `Authorization: Bearer <CRON_SECRET>` automatically when set).
+    /// `None` leaves the route open — local dev only, never production.
+    pub cron_secret: Option<String>,
     pub jwt_secret: String,
     pub mail_host: String,
     pub mail_port: u16,
@@ -124,6 +138,43 @@ pub async fn build_app() -> anyhow::Result<Router> {
     let webauthn_rp_origin =
         env::var("WEBAUTHN_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".to_string());
     let webauthn_rp_name = env::var("WEBAUTHN_RP_NAME").unwrap_or_else(|_| "Noap".to_string());
+    // Server-side Web Push (activity reminders on every device, tab or not).
+    // Generate a pair once (see README "Web Push setup") and set the private
+    // half here; the public half is derived at boot and served to browsers.
+    let vapid_private_key = env::var("VAPID_PRIVATE_KEY").ok().filter(|k| !k.trim().is_empty());
+    let vapid_subject =
+        env::var("VAPID_SUBJECT").unwrap_or_else(|_| "mailto:noreply@noap.example.com".to_string());
+    let vapid_public_key = vapid_private_key.as_deref().and_then(|k| {
+        match web_push::VapidSignatureBuilder::from_base64_no_sub(k.trim()) {
+            Ok(partial) => {
+                let raw = partial.get_public_key();
+                Some(base64::Engine::encode(
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                    raw,
+                ))
+            }
+            Err(e) => {
+                tracing::error!("VAPID_PRIVATE_KEY is invalid ({}) — server-side push disabled", e);
+                None
+            }
+        }
+    });
+    // A present-but-invalid private key must not silently half-enable push.
+    let vapid_private_key = match (&vapid_private_key, &vapid_public_key) {
+        (Some(_), Some(_)) => {
+            tracing::info!("Web Push enabled (VAPID subject {})", vapid_subject);
+            vapid_private_key
+        }
+        (Some(_), None) => None,
+        (None, _) => {
+            tracing::warn!("VAPID_PRIVATE_KEY is not set — server-side push notifications disabled (in-app reminders still work while a tab is open)");
+            None
+        }
+    };
+    let cron_secret = env::var("CRON_SECRET").ok().filter(|s| !s.is_empty());
+    if cron_secret.is_none() {
+        tracing::warn!("CRON_SECRET is not set — /cron/push-due accepts unauthenticated calls. Set it in production.");
+    }
     tracing::info!(
         "WebAuthn RP: id={} origin={}",
         webauthn_rp_id,
@@ -156,6 +207,14 @@ pub async fn build_app() -> anyhow::Result<Router> {
 
     let state = Arc::new(AppState {
         db,
+        http: reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new()),
+        vapid_private_key,
+        vapid_subject,
+        vapid_public_key,
+        cron_secret,
         jwt_secret,
         mail_host,
         mail_port,
@@ -211,7 +270,15 @@ pub async fn build_app() -> anyhow::Result<Router> {
         // Public on purpose: the handler performs full token + session
         // validation itself (it must also accept legacy body tokens once, to
         // migrate pre-cookie clients into HttpOnly cookies).
-        .route("/verify-token", post(user::verify_token));
+        .route("/verify-token", post(user::verify_token))
+        // Public on purpose: browsers need the VAPID public key to subscribe
+        // before they hold any session; it identifies the server, grants nothing.
+        .route("/push/vapid-key", get(push::vapid_key))
+        // Cron fan-out: authenticated by CRON_SECRET bearer inside the handler
+        // (cron has no user session, so it stays OUTSIDE verify_user).
+        // GET + POST: Vercel Cron invokes paths with GET; external per-minute
+        // pingers (cron-job.org on Hobby) can use either.
+        .route("/cron/push-due", get(push::cron_push_due).post(push::cron_push_due));
 
     let protected_routes = Router::new()
         .route("/sign-out", post(user::sign_out))
@@ -275,6 +342,20 @@ pub async fn build_app() -> anyhow::Result<Router> {
         .route("/label/add/{userId}", post(label::add))
         .route("/label/edit/{userId}", patch(label::edit))
         .route("/label/delete/{id}", delete(label::delete))
+        .route("/activities/{userId}", get(activity::view))
+        .route("/activity/add/{userId}", post(activity::add))
+        .route("/activity/edit/{userId}", patch(activity::edit))
+        .route("/activity/toggle/{id}", post(activity::toggle))
+        .route("/activity/triggered/{id}", post(activity::mark_triggered))
+        .route("/activity/delete/{id}", delete(activity::delete))
+        .route("/activity/link-note/{id}", post(activity::link_note))
+        .route("/activity/unlink-note/{id}", post(activity::unlink_note))
+        .route("/activity/complete/{id}", post(activity::complete))
+        .route("/activity/seen/{id}", post(activity::record_seen))
+        .route("/activity/progress/{id}", get(activity::progress))
+        .route("/push/subscribe/{userId}", post(push::subscribe))
+        .route("/push/unsubscribe/{userId}", post(push::unsubscribe))
+        .route("/push/subscriptions/{userId}", get(push::list))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::auth::verify_user,

@@ -13,5 +13,11 @@
       "source": "/(.*)",
       "destination": "/api/index"
     }
+  ],
+  "crons": [
+    {
+      "path": "/cron/push-due",
+      "schedule": "* * * * *"
+    }
   ]
 }

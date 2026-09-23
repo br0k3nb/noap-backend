@@ -461,6 +461,134 @@ pub struct Label {
     pub updatedAt: Option<DateTime<Utc>>,
 }
 
+/// A recurring activity ("schedule"): at each trigger occurrence the frontend
+/// scheduler fires a browser notification about it.
+///
+/// `triggerType` is the extension point for future recurrence kinds ("daily"
+/// today; weekly, interval, ... later): add the new kind to
+/// `handlers/activity.rs::validate_trigger`, give it its own optional config
+/// fields on [`ActivityTrigger`] (optional so stored documents never need a
+/// migration) and register it in the frontend trigger registry
+/// (`noap/src/services/activityNotifications.ts`).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Activity {
+    #[serde(
+        rename = "_id",
+        skip_serializing_if = "Option::is_none",
+        with = "object_id_hex::option"
+    )]
+    pub id: Option<ObjectId>,
+    #[serde(with = "object_id_hex")]
+    pub userId: ObjectId,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Recurrence kind of `trigger`: "daily" (every day at `time`) or "once"
+    /// (one-shot at `trigger.date` + `time`); more kinds later.
+    pub triggerType: String,
+    pub trigger: ActivityTrigger,
+    pub enabled: bool,
+    /// Dedupe key of the last occurrence this server pushed to the user's
+    /// devices ("YYYY-MM-DD" for daily, "DD/MM/YYYY" for once). The due-check
+    /// claims an occurrence atomically (`lastPushKey != key`) before sending,
+    /// so overlapping cron invocations can never double-notify.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lastPushKey: Option<String>,
+    /// Optional note linked to this activity. When set, the note acts as the
+    /// activity's recurring todo list: checking items off + "Mark done"
+    /// records the current occurrence, and the note resets its checkboxes at
+    /// the next occurrence. Stored as the hex string (see the `view` comment
+    /// about BOTH id forms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noteId: Option<String>,
+    /// "DD/MM/YYYY" (daily) or "DD/MM/YYYY HH:MM" (once) keys of the
+    /// occurrences already rolled over, newest last. The note resets its
+    /// checkboxes the first time the scheduler sees a newer occurrence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seenOccurrences: Option<Vec<String>>,
+    /// "DD/MM/YYYY" keys of the occurrences the user marked done, newest
+    /// last. Drives the streak + "answered?" state, never shrinks. One entry
+    /// per occurrence per device report (deduped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doneDates: Option<Vec<String>>,
+    /// Last time a client fired a notification for this activity. Bookkeeping
+    /// for cross-device visibility and future server-side push.
+    #[serde(
+        with = "bson_rfc3339_option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub lastTriggeredAt: Option<DateTime<Utc>>,
+    #[serde(
+        with = "bson_rfc3339_option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub createdAt: Option<DateTime<Utc>>,
+    #[serde(
+        with = "bson_rfc3339_option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub updatedAt: Option<DateTime<Utc>>,
+}
+
+/// Trigger configuration of an [`Activity`]. Each trigger kind only relies on
+/// the fields it needs; the remaining fields are reserved for future kinds so
+/// existing documents keep deserializing without migrations.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ActivityTrigger {
+    /// 24-hour "HH:MM" time of day the notification fires, in the app
+    /// timezone (America/Recife).
+    pub time: String,
+    /// "DD/MM/YYYY" day of the one-shot "once" trigger (ignored by "daily").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    /// Reserved for a future "weekly" trigger: 0 (Sunday) - 6 (Saturday).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekdays: Option<Vec<u8>>,
+}
+
+/// One device subscribed to server-side Web Push reminders (RFC8030).
+/// A user links every device they own (phone, PC, ...) so a due activity
+/// notifies all of them even when no Noap tab is open anywhere. The
+/// `endpoint` is globally unique per browser/device and acts as the
+/// idempotency key: re-subscribing the same device upserts instead of
+/// duplicating. Stored in the `push_subscriptions` collection.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PushSubscription {
+    #[serde(
+        rename = "_id",
+        skip_serializing_if = "Option::is_none",
+        with = "object_id_hex::option"
+    )]
+    pub id: Option<ObjectId>,
+    #[serde(with = "object_id_hex")]
+    pub userId: ObjectId,
+    /// Push service URL (FCM / Mozilla autopush / Apple / ...). Unique per
+    /// device; a 404/410 from it means the subscription died and the row is
+    /// deleted on the next send attempt.
+    pub endpoint: String,
+    /// Base64url (no pad) client keys from `pushSubscription.toJSON()`.
+    pub p256dh: String,
+    pub auth: String,
+    /// Best-effort device label for the "your devices" list (`navigator.userAgent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub userAgent: Option<String>,
+    #[serde(
+        with = "bson_rfc3339_option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub createdAt: Option<DateTime<Utc>>,
+    #[serde(
+        with = "bson_rfc3339_option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub updatedAt: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Session {
     #[serde(

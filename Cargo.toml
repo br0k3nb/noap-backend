@@ -38,6 +38,14 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 totp-rs = { version = "5.6", features = ["qr", "gen_secret"] }
 base64 = "0.22"
 rand = "0.8"
+# Web Push (RFC8030) sender for server-side activity reminders. No HTTP
+# client features: requests are built with the crate (VAPID signing + payload
+# encryption) and sent with the existing reqwest (rustls) client, so no
+# OpenSSL/curl enters the dependency tree.
+web-push = { version = "0.11", default-features = false }
+# http 0.2 ONLY for translating web-push's built request onto reqwest
+# (reqwest 0.12 speaks http 1.x; the two `http` crate versions differ).
+http = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
